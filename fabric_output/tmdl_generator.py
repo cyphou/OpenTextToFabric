@@ -218,7 +218,8 @@ class TMDLGenerator:
 
     def export(self, output_dir: str | Path) -> dict[str, Path]:
         """Export TMDL files to directory."""
-        out = Path(output_dir) / f"{self.model_name}.SemanticModel" / "definition"
+        model_dir = Path(output_dir) / f"{self.model_name}.SemanticModel"
+        out = model_dir / "definition"
         out.mkdir(parents=True, exist_ok=True)
         files: dict[str, Path] = {}
 
@@ -230,17 +231,33 @@ class TMDLGenerator:
             path.write_text(content, encoding="utf-8")
             files[filename] = path
 
-        # Also write schema JSON for reference
-        schema = {
-            "model_name": self.model_name,
-            "tables": self.tables,
-            "relationships": self.relationships,
-            "measures": self.measures,
+        # .platform file (required by PBI Desktop)
+        platform = {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+            "metadata": {
+                "type": "SemanticModel",
+                "displayName": self.model_name,
+            },
+            "config": {
+                "version": "2.0",
+                "logicalId": str(__import__("uuid").uuid4()),
+            },
         }
-        schema_path = out / "schema.json"
-        with open(schema_path, "w", encoding="utf-8") as f:
-            json.dump(schema, f, indent=2, default=str)
-        files["schema.json"] = schema_path
+        platform_path = model_dir / ".platform"
+        with open(platform_path, "w", encoding="utf-8") as f:
+            json.dump(platform, f, indent=2)
+        files[".platform"] = platform_path
+
+        # definition.pbism
+        pbism = {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/semanticModel/definitionProperties/1.0.0/schema.json",
+            "version": "4.0",
+            "settings": {},
+        }
+        pbism_path = model_dir / "definition.pbism"
+        with open(pbism_path, "w", encoding="utf-8") as f:
+            json.dump(pbism, f, indent=2)
+        files["definition.pbism"] = pbism_path
 
         logger.info(
             "Exported TMDL: %d tables, %d relationships, %d measures",

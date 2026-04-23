@@ -1,4 +1,29 @@
-"""PBIP generator — .pbip project output (PBIR v4.0 + TMDL)."""
+"""PBIP generator — .pbip project output (PBIR v4.0 + TMDL).
+
+Generates a complete Power BI project that can be opened directly in
+Power BI Desktop.  Follows the exact PBIR v4.0 folder layout:
+
+    {Name}/
+    ├── {Name}.pbip
+    ├── {Name}.Report/
+    │   ├── .platform
+    │   ├── definition.pbir            ← directly in .Report/
+    │   └── definition/
+    │       ├── version.json
+    │       ├── report.json
+    │       └── pages/
+    │           ├── pages.json
+    │           └── ReportSection/
+    │               ├── page.json
+    │               └── visuals/
+    │                   └── {id}/visual.json
+    └── {Name}.SemanticModel/
+        ├── .platform
+        ├── definition.pbism
+        └── definition/
+            ├── model.tmdl
+            └── tables/…
+"""
 
 from __future__ import annotations
 
@@ -10,6 +35,19 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Microsoft JSON schemas (pinned versions)
+_SCHEMA_PBIP = "https://developer.microsoft.com/json-schemas/fabric/pbip/pbipProperties/1.0.0/schema.json"
+_SCHEMA_PBIR = "https://developer.microsoft.com/json-schemas/fabric/item/report/definitionProperties/2.0.0/schema.json"
+_SCHEMA_PLATFORM = "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json"
+_SCHEMA_PBISM = "https://developer.microsoft.com/json-schemas/fabric/item/semanticModel/definitionProperties/1.0.0/schema.json"
+_SCHEMA_REPORT = "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/report/2.0.0/schema.json"
+_SCHEMA_VERSION = "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/versionMetadata/1.0.0/schema.json"
+_SCHEMA_PAGES = "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/pagesMetadata/1.0.0/schema.json"
+_SCHEMA_PAGE = "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.1.0/schema.json"
+_SCHEMA_VISUAL = "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.7.0/schema.json"
+
+THEME_NAME = "CY24SU06"
+
 
 class PBIPGenerator:
     """Generates .pbip Power BI project files (PBIR v4.0 format)."""
@@ -17,6 +55,7 @@ class PBIPGenerator:
     def __init__(self, report_name: str = "MigratedReport"):
         self.report_name = report_name
         self._report_id = str(uuid.uuid4())
+        self._model_id = str(uuid.uuid4())
 
     def generate(
         self,
@@ -36,47 +75,87 @@ class PBIPGenerator:
         """
         out = Path(output_dir) / self.report_name
         report_dir = out / f"{self.report_name}.Report"
+        model_dir = out / f"{self.report_name}.SemanticModel"
+        defn_dir = report_dir / "definition"
+
         report_dir.mkdir(parents=True, exist_ok=True)
+        defn_dir.mkdir(parents=True, exist_ok=True)
+        model_dir.mkdir(parents=True, exist_ok=True)
+
         files: dict[str, Path] = {}
 
-        # 1. .pbip file
+        # 1. .pbip project file
         files[".pbip"] = self._write_pbip(out)
 
-        # 2. Report definition.pbir
-        files["definition.pbir"] = self._write_pbir(report_dir, semantic_model_path)
+        # 2. Report .platform (required by PBI Desktop)
+        files["report.platform"] = self._write_platform(
+            report_dir, "Report", self.report_name, self._report_id,
+        )
 
-        # 3. Report pages
+        # 3. definition.pbir — directly in .Report/ (NOT inside definition/)
+        files["definition.pbir"] = self._write_pbir(
+            report_dir, semantic_model_path,
+        )
+
+        # 4. SemanticModel .platform
+        files["model.platform"] = self._write_platform(
+            model_dir, "SemanticModel", self.report_name, self._model_id,
+        )
+
+        # 5. definition.pbism
+        files["definition.pbism"] = self._write_pbism(model_dir)
+
+        # 6. version.json
+        files["version.json"] = self._write_version(defn_dir)
+
+        # 7. report.json
+        files["report.json"] = self._write_report_config(defn_dir)
+
+        # 8. Theme
+        files["theme"] = self._write_theme(report_dir)
+
+        # 9. Pages + visuals
         pages = self._build_pages(visuals)
+        page_names: list[str] = []
         for i, page in enumerate(pages):
-            page_dir = report_dir / "definition" / "pages" / page["name"]
+            page_id = page["id"]
+            page_names.append(page_id)
+            page_dir = defn_dir / "pages" / page_id
             page_dir.mkdir(parents=True, exist_ok=True)
 
             page_path = page_dir / "page.json"
             self._write_json(page_path, page["config"])
             files[f"page_{i}"] = page_path
 
-            # Visual containers within the page
+            # Visual containers
             visuals_dir = page_dir / "visuals"
             visuals_dir.mkdir(parents=True, exist_ok=True)
-            for j, visual in enumerate(page["visuals"]):
-                visual_dir = visuals_dir / visual.get("name", f"visual_{j}")
-                visual_dir.mkdir(parents=True, exist_ok=True)
-                visual_path = visual_dir / "visual.json"
-                self._write_json(visual_path, visual)
-                files[f"visual_{i}_{j}"] = visual_path
+            for j, vis in enumerate(page["visuals"]):
+                vid = vis.get("name", f"v{uuid.uuid4().hex[:12]}")
+                vdir = visuals_dir / vid
+                vdir.mkdir(parents=True, exist_ok=True)
+                vpath = vdir / "visual.json"
+                self._write_json(vpath, vis)
+                files[f"visual_{i}_{j}"] = vpath
 
-        # 4. Report config
-        files["report.json"] = self._write_report_config(report_dir)
+        # 10. pages.json (page ordering)
+        files["pages.json"] = self._write_pages_metadata(
+            defn_dir, page_names,
+        )
 
-        # 5. Static resources
-        files["StaticResources"] = self._write_static_resources(report_dir)
-
-        logger.info("Generated .pbip project with %d pages at %s", len(pages), out)
+        logger.info(
+            "Generated .pbip project: %d pages, %d visuals at %s",
+            len(pages),
+            sum(len(p["visuals"]) for p in pages),
+            out,
+        )
         return files
 
+    # ── File writers ──────────────────────────────────────────────
+
     def _write_pbip(self, out: Path) -> Path:
-        """Write the .pbip project file."""
         pbip = {
+            "$schema": _SCHEMA_PBIP,
             "version": "1.0",
             "artifacts": [
                 {
@@ -85,144 +164,116 @@ class PBIPGenerator:
                     },
                 },
             ],
+            "settings": {
+                "enableAutoRecovery": True,
+            },
         }
         path = out / f"{self.report_name}.pbip"
         self._write_json(path, pbip)
         return path
 
-    def _write_pbir(self, report_dir: Path, semantic_model_path: str) -> Path:
-        """Write the PBIR definition file."""
-        definition_dir = report_dir / "definition"
-        definition_dir.mkdir(parents=True, exist_ok=True)
+    def _write_platform(
+        self,
+        parent: Path,
+        artifact_type: str,
+        display_name: str,
+        logical_id: str,
+    ) -> Path:
+        platform = {
+            "$schema": _SCHEMA_PLATFORM,
+            "metadata": {
+                "type": artifact_type,
+                "displayName": display_name,
+            },
+            "config": {
+                "version": "2.0",
+                "logicalId": logical_id,
+            },
+        }
+        path = parent / ".platform"
+        self._write_json(path, platform)
+        return path
 
+    def _write_pbir(self, report_dir: Path, semantic_model_path: str) -> Path:
+        """Write definition.pbir directly inside .Report/ folder."""
         pbir = {
+            "$schema": _SCHEMA_PBIR,
             "version": "4.0",
             "datasetReference": {
                 "byPath": {
-                    "path": semantic_model_path or f"../{self.report_name}.SemanticModel",
+                    "path": semantic_model_path
+                    or f"../{self.report_name}.SemanticModel",
                 },
             },
         }
-        path = definition_dir / "definition.pbir"
+        path = report_dir / "definition.pbir"
         self._write_json(path, pbir)
         return path
 
-    def _build_pages(
-        self,
-        visuals: list[dict[str, Any]],
-        max_visuals_per_page: int = 10,
-    ) -> list[dict[str, Any]]:
-        """Organize visuals into report pages with layout."""
-        if not visuals:
-            return [self._build_empty_page("Page 1")]
-
-        pages: list[dict[str, Any]] = []
-        current_visuals: list[dict[str, Any]] = []
-        page_num = 1
-
-        y_offset = 20
-        for visual in visuals:
-            # Position visual
-            positioned = dict(visual)
-            pos = positioned.get("position", {})
-            size = positioned.get("size", {"width": 300, "height": 200})
-            pos["y"] = y_offset
-            positioned["position"] = pos
-            y_offset += size.get("height", 200) + 20  # 20px gap
-
-            # Generate a visual container config
-            visual_config = self._build_visual_config(positioned)
-            current_visuals.append(visual_config)
-
-            if len(current_visuals) >= max_visuals_per_page:
-                pages.append(self._build_page(f"Page {page_num}", current_visuals))
-                current_visuals = []
-                page_num += 1
-                y_offset = 20
-
-        if current_visuals:
-            pages.append(self._build_page(f"Page {page_num}", current_visuals))
-
-        return pages
-
-    def _build_page(self, name: str, visuals: list[dict[str, Any]]) -> dict[str, Any]:
-        """Build a single page definition."""
-        return {
-            "name": name.replace(" ", ""),
-            "config": {
-                "name": name,
-                "displayName": name,
-                "displayOption": 1,
-                "width": 1280,
-                "height": 720,
-            },
-            "visuals": visuals,
-        }
-
-    def _build_empty_page(self, name: str) -> dict[str, Any]:
-        return self._build_page(name, [])
-
-    def _build_visual_config(self, visual: dict[str, Any]) -> dict[str, Any]:
-        """Build PBI visual container configuration."""
-        pos = visual.get("position", {"x": 0, "y": 0})
-        size = visual.get("size", {"width": 300, "height": 200})
-        pbi_type = visual.get("visual_type", "textbox")
-        name = visual.get("name", "") or str(uuid.uuid4())[:8]
-
-        config: dict[str, Any] = {
-            "name": name,
-            "visual_type": pbi_type,
-            "position": {
-                "x": pos.get("x", 0),
-                "y": pos.get("y", 0),
-                "width": size.get("width", 300),
-                "height": size.get("height", 200),
-            },
-            "config": {
-                "singleVisual": {
-                    "visualType": pbi_type,
-                    "projections": {},
-                },
-            },
-        }
-
-        # Add column projections for tables
-        if "columns" in visual:
-            config["config"]["singleVisual"]["projections"]["Values"] = [
-                {"queryRef": col.get("name", "")} for col in visual["columns"]
-            ]
-
-        # Add style
-        if visual.get("style"):
-            config["config"]["singleVisual"]["vcObjects"] = {
-                "general": [{"properties": visual["style"]}],
-            }
-
-        return config
-
-    def _write_report_config(self, report_dir: Path) -> Path:
-        """Write report-level configuration."""
-        config = {
+    def _write_pbism(self, model_dir: Path) -> Path:
+        pbism = {
+            "$schema": _SCHEMA_PBISM,
             "version": "4.0",
+            "settings": {},
+        }
+        path = model_dir / "definition.pbism"
+        self._write_json(path, pbism)
+        return path
+
+    def _write_version(self, defn_dir: Path) -> Path:
+        version = {
+            "$schema": _SCHEMA_VERSION,
+            "version": "2.0.0",
+        }
+        path = defn_dir / "version.json"
+        self._write_json(path, version)
+        return path
+
+    def _write_report_config(self, defn_dir: Path) -> Path:
+        config = {
+            "$schema": _SCHEMA_REPORT,
             "themeCollection": {
                 "baseTheme": {
-                    "name": "CY24SU06",
-                    "reportVersionAtImport": "5.54",
-                    "type": 2,
+                    "name": THEME_NAME,
+                    "reportVersionAtImport": "5.58",
+                    "type": "SharedResources",
                 },
             },
-            "activeSectionIndex": 0,
+            "resourcePackages": [
+                {
+                    "name": "SharedResources",
+                    "type": "SharedResources",
+                    "items": [
+                        {
+                            "name": THEME_NAME,
+                            "path": f"BaseThemes/{THEME_NAME}.json",
+                            "type": "BaseTheme",
+                        },
+                    ],
+                },
+            ],
+            "settings": {
+                "hideVisualContainerHeader": True,
+                "useStylableVisualContainerHeader": True,
+                "defaultDrillFilterOtherVisuals": True,
+                "allowChangeFilterTypes": True,
+                "useEnhancedTooltips": True,
+            },
         }
-        path = report_dir / "definition" / "report.json"
+        path = defn_dir / "report.json"
         self._write_json(path, config)
         return path
 
-    def _write_static_resources(self, report_dir: Path) -> Path:
-        """Create static resources directory with default theme."""
-        res_dir = report_dir / "StaticResources" / "SharedResources" / "BaseThemes"
+    def _write_theme(self, report_dir: Path) -> Path:
+        res_dir = (
+            report_dir
+            / "StaticResources"
+            / "SharedResources"
+            / "BaseThemes"
+        )
         res_dir.mkdir(parents=True, exist_ok=True)
         theme = {
-            "name": "CY24SU06",
+            "name": THEME_NAME,
             "dataColors": [
                 "#118DFF", "#12239E", "#E66C37", "#6B007B",
                 "#E044A7", "#744EC2", "#D9B300", "#D64550",
@@ -231,9 +282,140 @@ class PBIPGenerator:
             "foreground": "#252423",
             "tableAccent": "#118DFF",
         }
-        path = res_dir / "CY24SU06.json"
+        path = res_dir / f"{THEME_NAME}.json"
         self._write_json(path, theme)
         return path
+
+    def _write_pages_metadata(
+        self, defn_dir: Path, page_names: list[str],
+    ) -> Path:
+        metadata = {
+            "$schema": _SCHEMA_PAGES,
+            "pageOrder": page_names,
+            "activePageName": page_names[0] if page_names else "",
+        }
+        pages_dir = defn_dir / "pages"
+        pages_dir.mkdir(parents=True, exist_ok=True)
+        path = pages_dir / "pages.json"
+        self._write_json(path, metadata)
+        return path
+
+    # ── Page / visual builders ────────────────────────────────────
+
+    def _build_pages(
+        self,
+        visuals: list[dict[str, Any]],
+        max_visuals_per_page: int = 10,
+    ) -> list[dict[str, Any]]:
+        if not visuals:
+            return [self._build_page("ReportSection", "Page 1", [])]
+
+        pages: list[dict[str, Any]] = []
+        current: list[dict[str, Any]] = []
+        page_num = 0
+
+        y_offset = 20
+        for visual in visuals:
+            positioned = dict(visual)
+            size = positioned.get("size", {"width": 300, "height": 200})
+            pos = dict(positioned.get("position", {}))
+            pos["y"] = y_offset
+            positioned["position"] = pos
+            y_offset += size.get("height", 200) + 20
+
+            current.append(self._build_visual_config(positioned))
+            if len(current) >= max_visuals_per_page:
+                page_id = "ReportSection" if page_num == 0 else f"ReportSection{uuid.uuid4().hex[:8]}"
+                pages.append(self._build_page(page_id, f"Page {page_num + 1}", current))
+                current = []
+                page_num += 1
+                y_offset = 20
+
+        if current or not pages:
+            page_id = "ReportSection" if page_num == 0 else f"ReportSection{uuid.uuid4().hex[:8]}"
+            pages.append(self._build_page(page_id, f"Page {page_num + 1}", current))
+
+        return pages
+
+    def _build_page(
+        self, page_id: str, display_name: str, visuals: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return {
+            "id": page_id,
+            "config": {
+                "$schema": _SCHEMA_PAGE,
+                "name": page_id,
+                "displayName": display_name,
+                "displayOption": "FitToPage",
+                "width": 1280,
+                "height": 720,
+            },
+            "visuals": visuals,
+        }
+
+    def _build_visual_config(self, visual: dict[str, Any]) -> dict[str, Any]:
+        pos = visual.get("position", {"x": 0, "y": 0})
+        size = visual.get("size", {"width": 300, "height": 200})
+        pbi_type = visual.get("visual_type", "textbox")
+        name = visual.get("name", "") or uuid.uuid4().hex[:12]
+
+        config: dict[str, Any] = {
+            "$schema": _SCHEMA_VISUAL,
+            "name": name,
+            "position": {
+                "x": pos.get("x", 0),
+                "y": pos.get("y", 0),
+                "z": 0,
+                "width": size.get("width", 300),
+                "height": size.get("height", 200),
+                "tabOrder": 0,
+            },
+            "visual": {
+                "visualType": pbi_type,
+                "drillFilterOtherVisuals": True,
+                "objects": {},
+            },
+        }
+
+        # Projections / query for data-bound visuals
+        if "columns" in visual:
+            config["visual"]["query"] = {
+                "Commands": [
+                    {
+                        "SemanticQueryDataShapeCommand": {
+                            "Query": {
+                                "Select": [
+                                    {
+                                        "Column": {
+                                            "Expression": {"SourceRef": {"Entity": visual.get("dataset", "")}},
+                                            "Property": col.get("name", ""),
+                                        },
+                                        "Name": col.get("name", ""),
+                                    }
+                                    for col in visual["columns"]
+                                ],
+                            },
+                        },
+                    },
+                ],
+            }
+
+        # Title
+        if visual.get("name"):
+            config["visual"]["visualContainerObjects"] = {
+                "title": [
+                    {
+                        "properties": {
+                            "show": {"expr": {"Literal": {"Value": "true"}}},
+                            "text": {"expr": {"Literal": {"Value": f"'{visual['name']}'"}}},
+                        },
+                    },
+                ],
+            }
+
+        return config
+
+    # ── Helpers ───────────────────────────────────────────────────
 
     @staticmethod
     def _write_json(path: Path, data: Any) -> None:

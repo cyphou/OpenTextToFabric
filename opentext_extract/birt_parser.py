@@ -46,6 +46,9 @@ class BIRTParser:
         except ET.ParseError as e:
             raise BIRTParseError(f"Invalid XML in {self.report_path}: {e}") from e
 
+        # Strip XML namespaces so all findall() calls work without prefixes
+        self._strip_namespaces(self._root)
+
         result: dict[str, Any] = {
             "report_name": self.report_path.stem,
             "report_path": str(self.report_path),
@@ -354,19 +357,17 @@ class BIRTParser:
 
     # ── Helpers ─────────────────────────────────────────────────
 
+    @staticmethod
+    def _strip_namespaces(root: ET.Element) -> None:
+        """Remove all XML namespace prefixes from tags in-place."""
+        for elem in root.iter():
+            if "}" in elem.tag:
+                elem.tag = elem.tag.split("}", 1)[1]
+
     def _find_all(self, xpath: str) -> list[ET.Element]:
-        """Find elements, handling both namespaced and non-namespaced XML."""
+        """Find elements (namespaces already stripped)."""
         assert self._root is not None
-        # Try without namespace first
-        results = self._root.findall(xpath)
-        if not results:
-            # Try with BIRT namespace
-            ns_xpath = "/".join(
-                f"report:{part}" if not part.startswith("*") else part
-                for part in xpath.split("/")
-            )
-            results = self._root.findall(ns_xpath, _NS)
-        return results
+        return self._root.findall(xpath)
 
     @staticmethod
     def _local_tag(tag: str) -> str:

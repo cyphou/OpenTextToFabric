@@ -266,7 +266,9 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress") -> None:
     step = progress.add_step("pbip_generation")
     step.start()
 
+    report_name = "MigratedReport"
     out = Path(output_dir)
+    project_dir = out / report_name  # .pbip project root
 
     # Load extracted data
     datasets = _load_json(out / "datasets.json")
@@ -274,16 +276,25 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress") -> None:
     expressions = _load_json(out / "expressions.json")
     visuals_data = _load_json(out / "visuals.json")
 
-    # Convert expressions
+    # Convert expressions → DAX measures
     expr_conv = ExpressionConverter()
-    expr_conv.convert_batch(expressions)
+    converted = expr_conv.convert_batch(expressions)
 
-    # Build semantic model
-    tmdl = TMDLGenerator()
+    # Build semantic model (TMDL) inside the project folder
+    tmdl = TMDLGenerator(model_name=report_name)
     for ds in datasets:
         tmdl.add_table_from_dataset(ds)
     tmdl.infer_relationships(datasets)
-    tmdl.export(output_dir)
+
+    # Add converted DAX measures
+    for conv in converted:
+        if conv.get("status") == "success" and conv.get("dax"):
+            table = conv.get("source", "") or (
+                tmdl.tables[0]["name"] if tmdl.tables else "Measures"
+            )
+            tmdl.add_measure(table, conv.get("column_name", ""), conv["dax"])
+
+    tmdl.export(str(project_dir))
 
     # Generate M queries
     mq = MQueryGenerator()
@@ -293,8 +304,8 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress") -> None:
     vm = VisualMapper()
     pbi_visuals = vm.map_all(visuals_data)
 
-    # Generate PBIP
-    pbip = PBIPGenerator()
+    # Generate PBIP project
+    pbip = PBIPGenerator(report_name=report_name)
     pbip.generate(pbi_visuals, output_dir=output_dir)
 
     step.complete()

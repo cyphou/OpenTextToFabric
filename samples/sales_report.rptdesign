@@ -1,0 +1,235 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<report xmlns="http://www.eclipse.org/birt/2005/design" version="3.2.23">
+    <property name="title">Sales Performance Report</property>
+    <property name="author">OpenText Analytics</property>
+
+    <data-sources>
+        <oda-data-source extensionID="org.eclipse.birt.report.data.oda.jdbc" name="SalesDB">
+            <property name="odaDriverClass">oracle.jdbc.OracleDriver</property>
+            <property name="odaURL">jdbc:oracle:thin:@salesdb:1521:ORCL</property>
+            <property name="odaUser">report_user</property>
+        </oda-data-source>
+    </data-sources>
+
+    <data-sets>
+        <oda-data-set extensionID="org.eclipse.birt.report.data.oda.jdbc.JdbcSelectDataSet" name="SalesData">
+            <structure name="cachedMetaData">
+                <list-property name="resultSet">
+                    <structure>
+                        <property name="position">1</property>
+                        <property name="name">region</property>
+                        <property name="dataType">string</property>
+                    </structure>
+                    <structure>
+                        <property name="position">2</property>
+                        <property name="name">product_category</property>
+                        <property name="dataType">string</property>
+                    </structure>
+                    <structure>
+                        <property name="position">3</property>
+                        <property name="name">sales_amount</property>
+                        <property name="dataType">decimal</property>
+                    </structure>
+                    <structure>
+                        <property name="position">4</property>
+                        <property name="name">quantity</property>
+                        <property name="dataType">integer</property>
+                    </structure>
+                    <structure>
+                        <property name="position">5</property>
+                        <property name="name">order_date</property>
+                        <property name="dataType">date</property>
+                    </structure>
+                    <structure>
+                        <property name="position">6</property>
+                        <property name="name">customer_name</property>
+                        <property name="dataType">string</property>
+                    </structure>
+                </list-property>
+            </structure>
+            <list-property name="columnHints">
+                <structure>
+                    <property name="columnName">region</property>
+                    <property name="displayName">Sales Region</property>
+                </structure>
+                <structure>
+                    <property name="columnName">product_category</property>
+                    <property name="displayName">Product Category</property>
+                </structure>
+                <structure>
+                    <property name="columnName">sales_amount</property>
+                    <property name="displayName">Sales Amount ($)</property>
+                </structure>
+                <structure>
+                    <property name="columnName">quantity</property>
+                    <property name="displayName">Quantity Sold</property>
+                </structure>
+                <structure>
+                    <property name="columnName">order_date</property>
+                    <property name="displayName">Order Date</property>
+                </structure>
+                <structure>
+                    <property name="columnName">customer_name</property>
+                    <property name="displayName">Customer</property>
+                </structure>
+            </list-property>
+            <xml-property name="queryText">
+SELECT r.region_name AS region,
+       p.category AS product_category,
+       o.total_amount AS sales_amount,
+       o.quantity,
+       o.order_date,
+       c.customer_name
+FROM orders o
+JOIN regions r ON o.region_id = r.region_id
+JOIN products p ON o.product_id = p.product_id
+JOIN customers c ON o.customer_id = c.customer_id
+WHERE o.order_date >= :start_date
+ORDER BY o.order_date DESC
+            </xml-property>
+            <property name="dataSource">SalesDB</property>
+            <list-property name="computedColumns">
+                <structure>
+                    <property name="name">profit_margin</property>
+                    <property name="dataType">float</property>
+                    <property name="expression">row["sales_amount"] * 0.35</property>
+                </structure>
+            </list-property>
+        </oda-data-set>
+
+        <oda-data-set extensionID="org.eclipse.birt.report.data.oda.jdbc.JdbcSelectDataSet" name="RegionSummary">
+            <structure name="cachedMetaData">
+                <list-property name="resultSet">
+                    <structure>
+                        <property name="position">1</property>
+                        <property name="name">region</property>
+                        <property name="dataType">string</property>
+                    </structure>
+                    <structure>
+                        <property name="position">2</property>
+                        <property name="name">total_sales</property>
+                        <property name="dataType">decimal</property>
+                    </structure>
+                    <structure>
+                        <property name="position">3</property>
+                        <property name="name">order_count</property>
+                        <property name="dataType">integer</property>
+                    </structure>
+                </list-property>
+            </structure>
+            <xml-property name="queryText">
+SELECT region_name AS region,
+       SUM(total_amount) AS total_sales,
+       COUNT(*) AS order_count
+FROM orders o
+JOIN regions r ON o.region_id = r.region_id
+GROUP BY region_name
+            </xml-property>
+            <property name="dataSource">SalesDB</property>
+        </oda-data-set>
+    </data-sets>
+
+    <body>
+        <label name="ReportTitle">
+            <property name="fontSize">18pt</property>
+            <property name="fontWeight">bold</property>
+            <text-property name="text">Sales Performance Dashboard</text-property>
+        </label>
+
+        <data name="TotalRevenue">
+            <property name="dataSet">SalesData</property>
+            <list-property name="boundDataColumns">
+                <structure>
+                    <property name="name">total_revenue</property>
+                    <expression name="expression">Total.sum(row["sales_amount"])</expression>
+                </structure>
+            </list-property>
+        </data>
+
+        <data name="AvgOrderValue">
+            <property name="dataSet">SalesData</property>
+            <list-property name="boundDataColumns">
+                <structure>
+                    <property name="name">avg_order</property>
+                    <expression name="expression">Total.ave(row["sales_amount"])</expression>
+                </structure>
+            </list-property>
+        </data>
+
+        <extended-item extensionName="Chart" name="SalesByRegionChart">
+            <property name="dataSet">RegionSummary</property>
+            <xml-property name="xmlRepresentation">
+                <model:Chart xmlns:model="http://www.birt.eclipse.org/ChartModel">
+                    <Type>bar</Type>
+                    <Title>Sales by Region</Title>
+                    <Series>
+                        <Category>region</Category>
+                        <Value>total_sales</Value>
+                    </Series>
+                </model:Chart>
+            </xml-property>
+        </extended-item>
+
+        <extended-item extensionName="Chart" name="SalesTrendChart">
+            <property name="dataSet">SalesData</property>
+            <xml-property name="xmlRepresentation">
+                <model:Chart xmlns:model="http://www.birt.eclipse.org/ChartModel">
+                    <Type>line</Type>
+                    <Title>Sales Trend</Title>
+                    <Series>
+                        <Category>order_date</Category>
+                        <Value>sales_amount</Value>
+                    </Series>
+                </model:Chart>
+            </xml-property>
+        </extended-item>
+
+        <extended-item extensionName="Chart" name="CategoryPieChart">
+            <property name="dataSet">SalesData</property>
+            <xml-property name="xmlRepresentation">
+                <model:Chart xmlns:model="http://www.birt.eclipse.org/ChartModel">
+                    <Type>pie</Type>
+                    <Title>Revenue by Category</Title>
+                    <Series>
+                        <Category>product_category</Category>
+                        <Value>sales_amount</Value>
+                    </Series>
+                </model:Chart>
+            </xml-property>
+        </extended-item>
+
+        <table name="SalesDetailTable">
+            <property name="dataSet">SalesData</property>
+            <column name="col_region"/>
+            <column name="col_product"/>
+            <column name="col_customer"/>
+            <column name="col_amount"/>
+            <column name="col_quantity"/>
+            <column name="col_date"/>
+            <header>
+                <row>
+                    <cell><label><text-property name="text">Region</text-property></label></cell>
+                    <cell><label><text-property name="text">Product</text-property></label></cell>
+                    <cell><label><text-property name="text">Customer</text-property></label></cell>
+                    <cell><label><text-property name="text">Amount</text-property></label></cell>
+                    <cell><label><text-property name="text">Qty</text-property></label></cell>
+                    <cell><label><text-property name="text">Date</text-property></label></cell>
+                </row>
+            </header>
+            <detail>
+                <row>
+                    <cell><data><expression name="expression">row["region"]</expression></data></cell>
+                    <cell><data><expression name="expression">row["product_category"]</expression></data></cell>
+                    <cell><data><expression name="expression">row["customer_name"]</expression></data></cell>
+                    <cell><data><expression name="expression">row["sales_amount"]</expression></data></cell>
+                    <cell><data><expression name="expression">row["quantity"]</expression></data></cell>
+                    <cell><data><expression name="expression">row["order_date"]</expression></data></cell>
+                </row>
+            </detail>
+        </table>
+
+        <extended-item extensionName="Crosstab" name="RegionCategoryPivot">
+            <property name="dataSet">SalesData</property>
+        </extended-item>
+    </body>
+</report>
