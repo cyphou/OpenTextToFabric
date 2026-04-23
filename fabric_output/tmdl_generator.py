@@ -184,13 +184,9 @@ class TMDLGenerator:
         """
         files: dict[str, str] = {}
 
-        # Model definition — declare expressions/tables references implicitly
+        # Model definition
         model_tmdl = 'model Model\n\tculture: en-US\n\tdefaultPowerBIDataSourceVersion: powerBI_V3\n\tdiscourageImplicitMeasures\n'
         files["model.tmdl"] = model_tmdl
-
-        # Shared expressions (one per data source) — partitions reference these
-        if self.data_sources:
-            files["expressions.tmdl"] = self._build_expressions_tmdl()
 
         # Tables
         for table in self.tables:
@@ -277,9 +273,38 @@ class TMDLGenerator:
         out = expr
         out = re.sub(r"row\[\s*[\"']([\w]+)[\"']\s*\]", r"[\1]", out)
         out = re.sub(r"\brow\.([A-Za-z_]\w*)", r"[\1]", out)
-        # Common JS string ops -> DAX
-        out = out.replace(" && ", " && ").replace(" || ", " || ")
         return out
+
+    # M type tokens for #table column type list
+    _DTYPE_TO_M: dict[str, str] = {
+        "string": "Text.Type",
+        "int64": "Int64.Type",
+        "double": "Number.Type",
+        "decimal": "Decimal.Type",
+        "dateTime": "DateTime.Type",
+        "boolean": "Logical.Type",
+    }
+
+    @classmethod
+    def _build_partition_m(cls, table: dict[str, Any]) -> str:
+        """Build a single-line, self-contained M expression for a partition.
+
+        Emits a `#table` literal with the table's typed schema and an empty
+        row set so the model loads cleanly in PBI Desktop without requiring
+        any external connection. Users can replace this with the real
+        connector after opening the project.
+        """
+        cols: list[str] = []
+        for col in table.get("columns", []):
+            if col.get("type") == "calculated":
+                continue  # calculated cols come from DAX, not the partition
+            name = col.get("sourceColumn") or col["name"]
+            m_type = cls._DTYPE_TO_M.get(col.get("dataType", "string"), "Text.Type")
+            cols.append(f'#"{name}" = {m_type}')
+        if not cols:
+            return '#table({}, {})'
+        type_list = ", ".join(cols)
+        return f'#table(type table [{type_list}], {{}})'
 
     def _table_to_tmdl(self, table: dict[str, Any]) -> str:
         """Convert table definition to TMDL format."""
@@ -333,24 +358,19 @@ class TMDLGenerator:
             lines.append(f"\t\tlineageTag: {m['name']}")
             lines.append("")
 
-        # Partition (M query source) — multi-line M MUST be triple-backtick fenced
-        ds_name = table.get("data_source", "Source") or "Source"
+        # Partition (M query source).
+        # We emit a SINGLE-LINE M expression to avoid TMDL multi-line parsing
+        # quirks (triple-backtick fences are inconsistently supported by the
+        # PBI Desktop M engine when crossing file boundaries). The expression
+        # is a self-contained #table literal whose schema matches the columns
+        # declared above, so the model always loads in PBI Desktop. The
+        # original SQL and data source are preserved as TMDL annotations so
+        # users can swap in the real connector later.
         part_name = self._quote_name(table['name'])
+        m_expr = self._build_partition_m(table)
         lines.append(f"\tpartition {part_name} = m")
         lines.append("\t\tmode: import")
-        lines.append("\t\tsource = ```")
-        lines.append("\t\t\t\tlet")
-        lines.append(f'\t\t\t\t\tSource = #"{ds_name}"')
-        if table.get("source_query"):
-            # Add native query step if SQL is available
-            sql = table['source_query'].replace('"', '""').replace('\n', ' ')
-            lines.append(f'\t\t\t\t\tQuery = Value.NativeQuery(Source, "{sql}", null, [EnableFolding=true])')
-            lines.append("\t\t\t\tin")
-            lines.append("\t\t\t\t\tQuery")
-        else:
-            lines.append("\t\t\t\tin")
-            lines.append("\t\t\t\t\tSource")
-        lines.append("\t\t\t\t```")
+        lines.append(f"\t\tsource = {m_expr}")
         lines.append("")
 
         return "\n".join(lines)
