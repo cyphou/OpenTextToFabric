@@ -379,26 +379,19 @@ class PBIPGenerator:
 
         # Projections / query for data-bound visuals
         if "columns" in visual:
-            config["visual"]["query"] = {
-                "Commands": [
-                    {
-                        "SemanticQueryDataShapeCommand": {
-                            "Query": {
-                                "Select": [
-                                    {
-                                        "Column": {
-                                            "Expression": {"SourceRef": {"Entity": visual.get("dataset", "")}},
-                                            "Property": col.get("name", ""),
-                                        },
-                                        "Name": col.get("name", ""),
-                                    }
-                                    for col in visual["columns"]
-                                ],
-                            },
-                        },
-                    },
-                ],
-            }
+            dataset = visual.get("dataset", "")
+            cols = visual.get("columns", [])
+            config["visual"]["query"] = self._build_query(pbi_type, dataset, cols)
+
+        # Chart config → query projections
+        elif "chart_config" in visual:
+            chart = visual["chart_config"]
+            dataset = visual.get("dataset", "")
+            categories = chart.get("categories", [])
+            series = chart.get("series", [])
+            config["visual"]["query"] = self._build_chart_query(
+                pbi_type, dataset, categories, series,
+            )
 
         # Title
         if visual.get("name"):
@@ -414,6 +407,96 @@ class PBIPGenerator:
             }
 
         return config
+
+    # ── Query builders (PBIR v4.0 queryState format) ──────────────
+
+    # Visual type → query role mapping
+    _ROLE_MAP: dict[str, list[str]] = {
+        "tableEx": ["Values"],
+        "pivotTable": ["Rows", "Values"],
+        "card": ["Fields"],
+        "multiRowCard": ["Fields"],
+        "kpi": ["Indicator"],
+        "slicer": ["Values"],
+        "textbox": [],
+        "image": [],
+    }
+    # Chart visuals default to Category + Y
+    _CHART_CATEGORY_ROLE = "Category"
+    _CHART_VALUE_ROLE = "Y"
+
+    def _build_query(
+        self,
+        visual_type: str,
+        entity: str,
+        columns: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Build a PBIR v4.0 queryState from columns."""
+        roles = self._ROLE_MAP.get(visual_type, ["Values"])
+        if not roles:
+            return {"queryState": {}}
+
+        # Put all columns into the first role
+        role_name = roles[0]
+        projections = [
+            self._make_projection(entity, col.get("name", ""))
+            for col in columns
+            if col.get("name")
+        ]
+
+        query_state: dict[str, Any] = {}
+        if projections:
+            query_state[role_name] = {"projections": projections}
+
+        return {"queryState": query_state}
+
+    def _build_chart_query(
+        self,
+        visual_type: str,
+        entity: str,
+        categories: list[Any],
+        series: list[Any],
+    ) -> dict[str, Any]:
+        """Build a PBIR v4.0 queryState for chart visuals."""
+        query_state: dict[str, Any] = {}
+
+        if categories:
+            cat_projections = []
+            for cat in categories:
+                name = cat if isinstance(cat, str) else cat.get("name", "")
+                if name:
+                    cat_projections.append(self._make_projection(entity, name))
+            if cat_projections:
+                query_state[self._CHART_CATEGORY_ROLE] = {
+                    "projections": cat_projections,
+                }
+
+        if series:
+            val_projections = []
+            for s in series:
+                name = s if isinstance(s, str) else s.get("name", "")
+                if name:
+                    val_projections.append(self._make_projection(entity, name))
+            if val_projections:
+                query_state[self._CHART_VALUE_ROLE] = {
+                    "projections": val_projections,
+                }
+
+        return {"queryState": query_state}
+
+    @staticmethod
+    def _make_projection(entity: str, prop: str) -> dict[str, Any]:
+        """Create a single RoleProjection entry."""
+        return {
+            "field": {
+                "Column": {
+                    "Expression": {"SourceRef": {"Entity": entity}},
+                    "Property": prop,
+                },
+            },
+            "queryRef": f"{entity}.{prop}" if entity else prop,
+            "nativeQueryRef": prop,
+        }
 
     # ── Helpers ───────────────────────────────────────────────────
 
