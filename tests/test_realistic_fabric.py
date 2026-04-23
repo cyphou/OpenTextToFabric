@@ -247,20 +247,26 @@ class TestRealisticTMDLGeneration(unittest.TestCase):
         self.assertIn("SUM([lineTotal])", orders_tmdl)
 
     def test_infer_join_relationships(self):
-        """Infer relationships from multi-table JOIN queries (no aliases)."""
+        """Infer relationships between tables sharing a column name."""
         tmdl = TMDLGenerator()
-        datasets = [
-            {
-                "name": "orders_details",
-                "query": """SELECT * FROM customers
-                           JOIN orders ON customers.customerNumber = orders.customerNumber""",
-                "data_source": "DB",
-                "column_hints": [],
-                "computed_columns": [],
-                "result_columns": [],
-            }
-        ]
-        rels = tmdl.infer_relationships(datasets)
+        tmdl.add_table_from_dataset({
+            "name": "Orders",
+            "data_source": "DB", "query": "",
+            "column_hints": [
+                {"columnName": "customerNumber", "dataType": "int"},
+                {"columnName": "amount", "dataType": "decimal"},
+            ],
+            "computed_columns": [], "result_columns": [],
+        })
+        tmdl.add_table_from_dataset({
+            "name": "Customers",
+            "data_source": "DB", "query": "",
+            "column_hints": [
+                {"columnName": "customerNumber", "dataType": "int"},
+            ],
+            "computed_columns": [], "result_columns": [],
+        })
+        rels = tmdl.infer_relationships([])
         self.assertTrue(len(rels) >= 1)
 
     def test_export_realistic(self):

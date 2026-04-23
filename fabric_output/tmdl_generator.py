@@ -20,6 +20,15 @@ class TMDLGenerator:
         self.tables: list[dict[str, Any]] = []
         self.relationships: list[dict[str, Any]] = []
         self.measures: list[dict[str, Any]] = []
+        # Data source connections keyed by source name
+        self.data_sources: dict[str, dict[str, Any]] = {}
+
+    def add_data_sources(self, connections: list[dict[str, Any]]) -> None:
+        """Register data source connections so shared M expressions can be emitted."""
+        for conn in connections or []:
+            name = conn.get("name")
+            if name:
+                self.data_sources[sanitize_name(name)] = conn
 
     def add_table_from_dataset(self, dataset: dict[str, Any]) -> dict[str, Any]:
         """Add a table from a BIRT dataset definition.
@@ -68,7 +77,7 @@ class TMDLGenerator:
                         cc.get("dataType", "string").lower(), "string"
                     ),
                     "type": "calculated",
-                    "expression": cc.get("expression", ""),
+                    "expression": self._birt_js_to_dax(cc.get("expression", "")),
                     "isHidden": False,
                 })
 
@@ -122,36 +131,50 @@ class TMDLGenerator:
         self,
         datasets: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Infer relationships from SQL JOIN clauses in dataset queries."""
-        for ds in datasets:
-            query = ds.get("query", "").upper()
-            if " JOIN " not in query:
+        """Infer relationships between *imported tables* using shared column names.
+
+        SQL JOIN clauses reference base tables (e.g. orders/regions) that are not
+        modeled as PBI tables — only the dataset result-sets become tables. The
+        only reliable signal across them is shared column names. We pick a
+        candidate FK when a column exists in two different tables and at least
+        one of them looks like a dimension (smaller cardinality / lookup).
+        """
+        # Build column -> [tables] index from the registered tables
+        col_to_tables: dict[str, list[str]] = {}
+        for tbl in self.tables:
+            for col in tbl.get("columns", []):
+                if col.get("type") == "calculated":
+                    continue
+                col_to_tables.setdefault(col["name"], []).append(tbl["name"])
+
+        seen: set[tuple[str, str, str]] = set()
+        for col_name, tables in col_to_tables.items():
+            if len(tables) < 2:
                 continue
-
-            # Simple pattern: FROM table1 JOIN table2 ON table1.col = table2.col
-            import re
-            join_pattern = re.compile(
-                r"(\w+)\s+JOIN\s+(\w+)\s+ON\s+(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)",
-                re.IGNORECASE,
+            # Treat the *smaller* table (fewer columns) as the dimension side
+            ranked = sorted(
+                tables,
+                key=lambda n: len(next(
+                    (t["columns"] for t in self.tables if t["name"] == n), []
+                )),
             )
-            for match in join_pattern.finditer(ds.get("query", "")):
-                from_table = match.group(1)
-                to_table = match.group(2)
-                from_col = match.group(4)
-                to_col = match.group(6)
-
-                rel = {
-                    "name": f"rel_{sanitize_name(from_table)}_{sanitize_name(to_table)}",
-                    "fromTable": sanitize_name(from_table),
-                    "fromColumn": sanitize_name(from_col),
-                    "toTable": sanitize_name(to_table),
-                    "toColumn": sanitize_name(to_col),
+            dim_table = ranked[0]
+            for fact_table in ranked[1:]:
+                key = (fact_table, dim_table, col_name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                self.relationships.append({
+                    "name": f"rel_{fact_table}_{dim_table}_{col_name}",
+                    "fromTable": fact_table,
+                    "fromColumn": col_name,
+                    "toTable": dim_table,
+                    "toColumn": col_name,
                     "crossFilteringBehavior": "oneDirection",
                     "cardinality": "manyToOne",
-                }
-                self.relationships.append(rel)
+                })
 
-        logger.info("Inferred %d relationships from SQL joins", len(self.relationships))
+        logger.info("Inferred %d relationships from shared columns", len(self.relationships))
         return self.relationships
 
     def generate_tmdl(self) -> dict[str, str]:
@@ -161,9 +184,13 @@ class TMDLGenerator:
         """
         files: dict[str, str] = {}
 
-        # Model definition
-        model_tmdl = 'model Model\n\tculture: en-US\n'
+        # Model definition — declare expressions/tables references implicitly
+        model_tmdl = 'model Model\n\tculture: en-US\n\tdefaultPowerBIDataSourceVersion: powerBI_V3\n\tdiscourageImplicitMeasures\n'
         files["model.tmdl"] = model_tmdl
+
+        # Shared expressions (one per data source) — partitions reference these
+        if self.data_sources:
+            files["expressions.tmdl"] = self._build_expressions_tmdl()
 
         # Tables
         for table in self.tables:
@@ -184,12 +211,72 @@ class TMDLGenerator:
 
         return files
 
+    def _build_expressions_tmdl(self) -> str:
+        """Generate shared M expressions for each data source.
+
+        Maps known driver classes to PBI connectors. Falls back to a literal
+        sample table so the model still loads when the source can't be reached.
+        """
+        lines: list[str] = []
+        for src_name, conn in self.data_sources.items():
+            driver = (conn.get("odaDriverClass") or "").lower()
+            url = conn.get("odaURL") or ""
+            m_expr = self._build_source_m(driver, url, src_name)
+            quoted = self._quote_name(src_name)
+            lines.append(f"expression {quoted} = {m_expr}")
+            lines.append(f"\tlineageTag: {src_name}")
+            lines.append("\tkind: m")
+            lines.append("")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_source_m(driver: str, url: str, name: str) -> str:
+        """Map a JDBC connection to an M source expression."""
+        import re
+        if "oracle" in driver:
+            # jdbc:oracle:thin:@host:port:SID  OR  @host:port/SERVICE
+            m = re.search(r"@([^:/?#]+)(?::(\d+))?[:/]([\w.]+)", url)
+            if m:
+                host, port, sid = m.group(1), m.group(2) or "1521", m.group(3)
+                return f'Oracle.Database("{host}:{port}/{sid}", [HierarchicalNavigation=true])'
+        if "sqlserver" in driver or "mssql" in driver:
+            m = re.search(r"//([^:/?#;]+)(?::(\d+))?[/;]?(?:databaseName=)?([\w.]+)?", url)
+            if m:
+                host = m.group(1)
+                db = m.group(3) or "master"
+                return f'Sql.Database("{host}", "{db}")'
+        if "postgres" in driver:
+            m = re.search(r"//([^:/?#]+)(?::(\d+))?/([\w.]+)", url)
+            if m:
+                host, port, db = m.group(1), m.group(2) or "5432", m.group(3)
+                return f'PostgreSQL.Database("{host}:{port}", "{db}")'
+        # Fallback: empty literal table — loads cleanly so the model isn't broken
+        return '#table({}, {})'
+
     @staticmethod
     def _quote_name(name: str) -> str:
         """Quote a TMDL name if it contains special characters."""
         if any(c in name for c in " ./-()'+@#$%^&*!~`<>?;:{}|\\,"):
             return f"'{name}'"
         return name
+
+    @staticmethod
+    def _birt_js_to_dax(expr: str) -> str:
+        """Translate simple BIRT JavaScript expressions to DAX.
+
+        Handles `row["col"]` / `row['col']` / `row.col` -> `[col]` and the
+        common JS operators that map 1:1 to DAX. Anything that doesn't match
+        is returned unchanged so the user can fix it in PBI.
+        """
+        import re
+        if not expr:
+            return expr
+        out = expr
+        out = re.sub(r"row\[\s*[\"']([\w]+)[\"']\s*\]", r"[\1]", out)
+        out = re.sub(r"\brow\.([A-Za-z_]\w*)", r"[\1]", out)
+        # Common JS string ops -> DAX
+        out = out.replace(" && ", " && ").replace(" || ", " || ")
+        return out
 
     def _table_to_tmdl(self, table: dict[str, Any]) -> str:
         """Convert table definition to TMDL format."""

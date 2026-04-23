@@ -151,6 +151,7 @@ class VisualMapper:
             visual["groups"] = element.get("groups", [])
         elif chart_type:
             visual["chart_config"] = self._map_chart_config(element)
+            visual["dataset"] = element.get("dataset", "")
         elif element_type in ("label", "text", "data"):
             visual["text_config"] = self._map_text_config(element)
 

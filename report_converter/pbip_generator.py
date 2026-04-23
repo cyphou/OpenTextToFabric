@@ -82,6 +82,25 @@ class PBIPGenerator:
         defn_dir.mkdir(parents=True, exist_ok=True)
         model_dir.mkdir(parents=True, exist_ok=True)
 
+        # Clean stale page directories from prior runs to avoid orphan
+        # "Page N" tabs appearing in PBI Desktop. The pages folder is
+        # rebuilt from scratch every generation. If files are locked
+        # (e.g. PBI Desktop has the project open) we fall back to
+        # best-effort per-file removal so the generation can still proceed.
+        pages_dir = defn_dir / "pages"
+        if pages_dir.exists():
+            import shutil
+            def _on_error(func, path, _exc):
+                try:
+                    Path(path).chmod(0o600)
+                    func(path)
+                except Exception:
+                    logger.warning("Could not remove stale path: %s", path)
+            try:
+                shutil.rmtree(pages_dir, onerror=_on_error)
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("Stale pages cleanup partially failed: %s", e)
+
         files: dict[str, Path] = {}
 
         # 1. .pbip project file

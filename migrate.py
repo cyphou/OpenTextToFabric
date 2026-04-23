@@ -313,6 +313,7 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress") -> None:
 
     # Build semantic model (TMDL) inside the project folder
     tmdl = TMDLGenerator(model_name=report_name)
+    tmdl.add_data_sources(connections)
     for ds in datasets:
         tmdl.add_table_from_dataset(ds)
     tmdl.infer_relationships(datasets)

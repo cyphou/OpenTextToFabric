@@ -233,13 +233,21 @@ class BIRTParser:
             })
 
         # Extended item type (charts, crosstabs)
-        ext_type = ""
-        for prop in elem.findall("property"):
-            if prop.get("name") == "extensionName":
-                ext_type = prop.text or ""
+        # extensionName may appear as XML attribute OR as a child <property>
+        ext_type = elem.get("extensionName", "")
+        if not ext_type:
+            for prop in elem.findall("property"):
+                if prop.get("name") == "extensionName":
+                    ext_type = prop.text or ""
+                    break
         if ext_type:
             element["extension_name"] = ext_type
             element["chart_config"] = self._extract_chart_config(elem)
+            # Capture dataSet for charts/extended items so visuals can bind data
+            for prop in elem.findall("property"):
+                if prop.get("name") == "dataSet":
+                    element["dataset"] = prop.text or ""
+                    break
 
         # Table-specific: groups, header, detail, footer
         if tag == "table":
@@ -296,24 +304,38 @@ class BIRTParser:
 
     def _extract_chart_config(self, elem: ET.Element) -> dict[str, Any]:
         """Extract chart configuration from an extended item."""
+        import re
         config: dict[str, Any] = {"chart_type": "", "series": [], "categories": []}
         for xp in elem.findall(".//xml-property"):
-            if xp.get("name") == "xmlRepresentation":
-                chart_xml = xp.text or ""
-                config["raw_xml"] = chart_xml[:2000]  # truncate for safety
-                # Parse chart type from the XML snippet
-                if "Bar" in chart_xml:
-                    config["chart_type"] = "bar"
-                elif "Line" in chart_xml:
-                    config["chart_type"] = "line"
-                elif "Pie" in chart_xml:
-                    config["chart_type"] = "pie"
-                elif "Scatter" in chart_xml:
-                    config["chart_type"] = "scatter"
-                elif "Area" in chart_xml:
-                    config["chart_type"] = "area"
-                else:
-                    config["chart_type"] = "unknown"
+            if xp.get("name") != "xmlRepresentation":
+                continue
+            # xml-property may contain text OR nested children (model:Chart…)
+            chart_xml = xp.text or ""
+            for child in xp:
+                try:
+                    chart_xml += ET.tostring(child, encoding="unicode")
+                except Exception:
+                    pass
+            config["raw_xml"] = chart_xml[:2000]  # truncate for safety
+
+            # Prefer explicit <Type>...</Type>
+            m = re.search(r"<(?:\w+:)?Type[^>]*>\s*([A-Za-z]+)\s*<", chart_xml)
+            type_token = m.group(1).lower() if m else ""
+            if not type_token:
+                low = chart_xml.lower()
+                for t in ("bar", "column", "line", "pie", "donut", "scatter", "bubble", "area"):
+                    if t in low:
+                        type_token = t
+                        break
+            config["chart_type"] = type_token or "unknown"
+
+            # Extract category and value fields (strip namespace prefixes)
+            for cat in re.findall(r"<(?:\w+:)?Category[^>]*>\s*([^<\s]+)\s*<", chart_xml):
+                if cat:
+                    config["categories"].append({"name": cat})
+            for val in re.findall(r"<(?:\w+:)?Value[^>]*>\s*([^<\s]+)\s*<", chart_xml):
+                if val:
+                    config["series"].append({"name": val})
         return config
 
     def _extract_crosstab_config(self, elem: ET.Element) -> dict[str, Any]:

@@ -192,13 +192,29 @@ class TestTMDLGenerator(unittest.TestCase):
         self.assertIn("column col1", files["tables/Test.tmdl"])
 
     def test_infer_relationships(self):
+        # Relationships are now inferred from shared column names across the
+        # registered tables (not from raw SQL JOIN clauses, which reference
+        # base tables that don't become PBI tables).
         tmdl = TMDLGenerator()
-        datasets = [{
-            "name": "test", "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id",
-            "data_source": "", "column_hints": [], "computed_columns": [], "result_columns": [],
-        }]
-        rels = tmdl.infer_relationships(datasets)
+        tmdl.add_table_from_dataset({
+            "name": "Sales", "data_source": "", "query": "",
+            "column_hints": [
+                {"columnName": "region", "dataType": "string"},
+                {"columnName": "amount", "dataType": "decimal"},
+            ],
+            "computed_columns": [], "result_columns": [],
+        })
+        tmdl.add_table_from_dataset({
+            "name": "Region", "data_source": "", "query": "",
+            "column_hints": [
+                {"columnName": "region", "dataType": "string"},
+            ],
+            "computed_columns": [], "result_columns": [],
+        })
+        rels = tmdl.infer_relationships([])
         self.assertEqual(len(rels), 1)
+        self.assertEqual(rels[0]["fromColumn"], "region")
+        self.assertEqual(rels[0]["toColumn"], "region")
 
     def test_export(self):
         with tempfile.TemporaryDirectory() as tmpdir:
