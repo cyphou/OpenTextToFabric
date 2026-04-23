@@ -73,6 +73,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--workspace-id", help="Target Fabric workspace ID")
     parser.add_argument("--tenant-id", help="Azure tenant ID for deployment")
+    parser.add_argument("--client-id", help="Azure AD app client ID")
+    parser.add_argument(
+        "--client-secret-env",
+        help="Environment variable containing the client secret",
+    )
+    parser.add_argument(
+        "--create-workspace",
+        action="store_true",
+        help="Create workspace if it does not exist",
+    )
+    parser.add_argument("--workspace-name", help="Name for new workspace")
+    parser.add_argument("--capacity-id", help="Fabric capacity ID for new workspace")
+
+    # Batch resume
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a previous batch run from checkpoint",
+    )
 
     # Report
     parser.add_argument(
@@ -130,6 +149,14 @@ def main() -> int:
     output_dir = args.output_dir
 
     try:
+        # Assessment-only mode
+        if args.assess_only:
+            return _run_assessment(args, output_dir)
+
+        # Batch mode — process multiple reports
+        if args.batch:
+            return _run_batch(args, output_dir, progress)
+
         if args.source_type in ("content-server", "all"):
             _run_content_server(args, output_dir, progress)
         if args.source_type in ("documentum", "all"):
@@ -152,6 +179,10 @@ def main() -> int:
             from reporting.generate_report import generate_report
             report_path = generate_report(output_dir=output_dir)
             logger.info("Migration report: %s", report_path)
+
+        # Deploy to Fabric workspace
+        if args.deploy:
+            return _run_deploy(args, output_dir)
 
         logger.info("Migration complete. Summary: %s", progress.summary())
         return 0
@@ -286,13 +317,32 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress") -> None:
         tmdl.add_table_from_dataset(ds)
     tmdl.infer_relationships(datasets)
 
+    # Build table name lookup from dataset names
+    table_names = {t["name"] for t in tmdl.tables}
+    default_table = tmdl.tables[0]["name"] if tmdl.tables else "Measures"
+
     # Add converted DAX measures
     for conv in converted:
-        if conv.get("status") == "success" and conv.get("dax"):
-            table = conv.get("source", "") or (
-                tmdl.tables[0]["name"] if tmdl.tables else "Measures"
-            )
-            tmdl.add_measure(table, conv.get("column_name", ""), conv["dax"])
+        dax = conv.get("converted", "")
+        if not dax or conv.get("status") not in ("success", "partial"):
+            continue
+        # Skip simple column references — only add aggregations as measures
+        if dax.startswith("[") and dax.endswith("]") and dax.count("[") == 1:
+            continue
+
+        # Resolve table from source context (e.g. "dataset:SalesData")
+        source = conv.get("source", "")
+        table = default_table
+        if ":" in source:
+            parts = source.split(":")
+            candidate = parts[-1]  # last segment
+            if candidate in table_names:
+                table = candidate
+            elif parts[0] == "dataset" and len(parts) > 1 and parts[1] in table_names:
+                table = parts[1]
+
+        name = conv.get("column_name", "") or f"Measure_{len(tmdl.measures) + 1}"
+        tmdl.add_measure(table, name, dax)
 
     tmdl.export(str(project_dir))
 
@@ -320,6 +370,149 @@ def _load_json(path: "Path") -> list:
         with open(p, encoding="utf-8") as f:
             return json.load(f)
     return []
+
+
+def _run_assessment(args: argparse.Namespace, output_dir: str) -> int:
+    """Run pre-migration assessment only."""
+    from pathlib import Path
+    from assessment.scanner import ContentScanner
+    from assessment.complexity import ComplexityScorer
+    from assessment.readiness_report import ReadinessReport
+    from assessment.strategy_advisor import StrategyAdvisor
+
+    input_path = Path(args.input) if args.input else None
+    if not input_path or not input_path.exists():
+        logger.error("Assessment requires --input pointing to report(s)")
+        return 1
+
+    scanner = ContentScanner()
+    if input_path.is_dir():
+        scan_result = scanner.scan_directory(str(input_path))
+    else:
+        scan_result = scanner.scan_report_file(str(input_path))
+
+    scorer = ComplexityScorer()
+    complexity = scorer.score_batch(scan_result.get("reports", [scan_result]))
+
+    advisor = StrategyAdvisor()
+    strategy = advisor.recommend(scan_result, complexity)
+
+    report = ReadinessReport()
+    assessment = report.evaluate(scan_result, complexity, strategy)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    html_path = out_dir / "readiness_report.html"
+    report.generate_html(assessment, str(html_path))
+
+    logger.info("Assessment complete. Report: %s", html_path)
+    logger.info(
+        "Strategy: %s | Model: %s | Effort: %sh",
+        strategy.get("approach_label"),
+        strategy.get("model_mode"),
+        strategy.get("estimated_effort_hours"),
+    )
+    return 0
+
+
+def _run_batch(
+    args: argparse.Namespace,
+    output_dir: str,
+    progress: "MigrationProgress",
+) -> int:
+    """Process multiple reports in batch mode with checkpoint/resume."""
+    import json
+    from pathlib import Path
+
+    input_path = Path(args.input) if args.input else None
+    if not input_path or not input_path.is_dir():
+        logger.error("Batch mode requires --input pointing to a directory")
+        return 1
+
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = out / "batch_checkpoint.json"
+
+    # Load checkpoint for resume
+    completed: set[str] = set()
+    if args.resume and checkpoint_path.exists():
+        with open(checkpoint_path, encoding="utf-8") as f:
+            cp = json.load(f)
+            completed = set(cp.get("completed", []))
+        logger.info("Resuming batch: %d reports already done", len(completed))
+
+    reports = sorted(input_path.glob("*.rptdesign"))
+    if not reports:
+        logger.warning("No .rptdesign files found in %s", input_path)
+        return 0
+
+    results: list[dict] = []
+    for rpt in reports:
+        if rpt.name in completed:
+            logger.info("Skipping %s (already completed)", rpt.name)
+            results.append({"report": rpt.name, "status": "skipped"})
+            continue
+
+        report_out = str(out / rpt.stem)
+        logger.info("Processing %s → %s", rpt.name, report_out)
+
+        try:
+            from opentext_extract.birt_parser import BIRTParser
+
+            parser = BIRTParser(rpt)
+            parser.export_json(report_out)
+
+            if args.output_format in ("pbip", "both"):
+                _generate_pbip(report_out, progress)
+
+            completed.add(rpt.name)
+            results.append({"report": rpt.name, "status": "success"})
+        except Exception as e:
+            logger.error("Failed to process %s: %s", rpt.name, e)
+            results.append({"report": rpt.name, "status": "failed", "error": str(e)})
+
+        # Save checkpoint after each report
+        with open(checkpoint_path, "w", encoding="utf-8") as f:
+            json.dump({"completed": sorted(completed), "results": results}, f, indent=2)
+
+    successes = sum(1 for r in results if r["status"] == "success")
+    failures = sum(1 for r in results if r["status"] == "failed")
+    logger.info("Batch complete: %d success, %d failed, %d skipped", successes, failures, len(results) - successes - failures)
+    return 1 if failures > 0 else 0
+
+
+def _run_deploy(args: argparse.Namespace, output_dir: str) -> int:
+    """Deploy migration output to Fabric workspace."""
+    import os
+    from deploy.deployer import Deployer
+
+    client_secret = ""
+    if args.client_secret_env:
+        client_secret = os.environ.get(args.client_secret_env, "")
+        if not client_secret:
+            logger.error("Environment variable %s is empty", args.client_secret_env)
+            return 1
+
+    deployer = Deployer(
+        workspace_id=args.workspace_id or "",
+        tenant_id=args.tenant_id or "",
+        client_id=args.client_id or "",
+        client_secret=client_secret,
+        create_workspace=args.create_workspace,
+        workspace_name=args.workspace_name or "",
+        capacity_id=args.capacity_id or "",
+    )
+
+    result = deployer.deploy(output_dir)
+    errors = result.get("errors", [])
+    if errors:
+        for err in errors:
+            logger.error("Deploy error: %s", err)
+        return 1
+
+    for step_r in result.get("steps", []):
+        logger.info("Deploy %s: %s", step_r.get("step"), step_r.get("status"))
+
+    return 0
 
 
 if __name__ == "__main__":

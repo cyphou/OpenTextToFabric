@@ -13,30 +13,58 @@ VISUAL_TYPE_MAP: dict[str, str] = {
     "table": "tableEx",
     "list": "tableEx",
     "grid": "tableEx",
-    # Charts
+    # Charts — bar family
     "bar": "clusteredBarChart",
     "stackedbar": "stackedBarChart",
+    "percentstackedbar": "hundredPercentStackedBarChart",
+    "column": "clusteredColumnChart",
+    "stackedcolumn": "stackedColumnChart",
+    "percentstackedcolumn": "hundredPercentStackedColumnChart",
+    # Charts — line/area
     "line": "lineChart",
     "area": "areaChart",
+    "stackedarea": "stackedAreaChart",
+    # Charts — pie/donut
     "pie": "pieChart",
     "donut": "donutChart",
+    # Charts — scatter/bubble
     "scatter": "scatterChart",
     "bubble": "scatterChart",
+    # Charts — combo
     "combo": "lineClusteredColumnComboChart",
+    # Charts — specialized
     "waterfall": "waterfallChart",
     "funnel": "funnel",
     "gauge": "gauge",
     "meter": "gauge",
     "treemap": "treemap",
+    "radar": "radarChart",
+    "ribbon": "ribbonChart",
+    # KPI / card variants
+    "kpi": "multiRowCard",
+    "multicard": "multiRowCard",
+    "scorecard": "kpi",
+    # Map
+    "map": "map",
+    "filledmap": "filledMap",
+    "shapemap": "shapeMap",
+    # Advanced analytics
+    "decompositiontree": "decompositionTreeVisual",
+    "keyinfluencers": "keyInfluencers",
+    "qna": "qnaVisual",
     # Cross-tabulation
     "Crosstab": "pivotTable",
     "crosstab": "pivotTable",
+    "matrix": "pivotTable",
     # Text / labels
     "label": "textbox",
     "text": "textbox",
     "data": "card",
     # Images
     "image": "image",
+    # Slicer
+    "parameter": "slicer",
+    "filter": "slicer",
 }
 
 # Default visual sizes (width, height) in pixels
@@ -45,8 +73,13 @@ DEFAULT_SIZES: dict[str, tuple[int, int]] = {
     "pivotTable": (600, 400),
     "clusteredBarChart": (400, 300),
     "stackedBarChart": (400, 300),
+    "hundredPercentStackedBarChart": (400, 300),
+    "clusteredColumnChart": (400, 300),
+    "stackedColumnChart": (400, 300),
+    "hundredPercentStackedColumnChart": (400, 300),
     "lineChart": (400, 300),
     "areaChart": (400, 300),
+    "stackedAreaChart": (400, 300),
     "pieChart": (300, 300),
     "donutChart": (300, 300),
     "scatterChart": (400, 300),
@@ -55,6 +88,17 @@ DEFAULT_SIZES: dict[str, tuple[int, int]] = {
     "funnel": (300, 400),
     "gauge": (250, 250),
     "treemap": (400, 300),
+    "radarChart": (350, 350),
+    "ribbonChart": (400, 300),
+    "multiRowCard": (400, 200),
+    "kpi": (250, 150),
+    "map": (500, 400),
+    "filledMap": (500, 400),
+    "shapeMap": (500, 400),
+    "decompositionTreeVisual": (600, 400),
+    "keyInfluencers": (600, 400),
+    "qnaVisual": (500, 300),
+    "slicer": (200, 100),
     "textbox": (200, 50),
     "card": (150, 100),
     "image": (200, 150),

@@ -81,15 +81,88 @@ FUNCTION_MAP: list[tuple[str, str, bool]] = [
     (r"BirtMath\.sqrt\(([^)]+)\)", r"SQRT(\1)", True),
     (r"BirtMath\.log\(([^)]+)\)", r"LN(\1)", True),
     (r"BirtMath\.log10\(([^)]+)\)", r"LOG(\1, 10)", True),
+    (r"BirtMath\.exp\(([^)]+)\)", r"EXP(\1)", True),
+    (r"BirtMath\.sign\(([^)]+)\)", r"SIGN(\1)", True),
+    (r"BirtMath\.pi\(\)", "PI()", True),
+    (r"BirtMath\.random\(\)", "RAND()", True),
+    (r"BirtMath\.max\(([^,]+),\s*([^)]+)\)", r"MAX(\1, \2)", True),
+    (r"BirtMath\.min\(([^,]+),\s*([^)]+)\)", r"MIN(\1, \2)", True),
+    (r"BirtMath\.safeDivide\(([^,]+),\s*([^)]+)\)", r"DIVIDE(\1, \2, 0)", True),
+    (r"BirtMath\.truncate\(([^,]+),\s*(\d+)\)", r"TRUNC(\1, \2)", True),
+    (r"BirtMath\.truncate\(([^)]+)\)", r"TRUNC(\1, 0)", True),
 
     # Type conversion
     (r"BirtComp\.toInteger\(([^)]+)\)", r"INT(\1)", True),
     (r"BirtComp\.toDouble\(([^)]+)\)", r"VALUE(\1)", True),
     (r"BirtComp\.toString\(([^)]+)\)", r"FORMAT(\1, \"\")", True),
     (r"BirtComp\.toDate\(([^)]+)\)", r"DATEVALUE(\1)", True),
+    (r"BirtComp\.toBoolean\(([^)]+)\)", r"IF(\1, TRUE(), FALSE())", True),
 
     # Conditional
     (r"BirtComp\.ifNull\(([^,]+),\s*([^)]+)\)", r"IF(ISBLANK(\1), \2, \1)", True),
+    (r"BirtComp\.nullIf\(([^,]+),\s*([^)]+)\)", r"IF(\1 = \2, BLANK(), \1)", True),
+
+    # Formatting functions
+    (r"BirtStr\.format\(([^,]+),\s*\"#,##0\"\)", r"FORMAT(\1, \"#,##0\")", True),
+    (r"BirtStr\.format\(([^,]+),\s*\"#,##0\.00\"\)", r"FORMAT(\1, \"#,##0.00\")", True),
+    (r"BirtStr\.format\(([^,]+),\s*([^)]+)\)", r"FORMAT(\1, \2)", True),
+    (r"BirtDateTime\.format\(([^,]+),\s*([^)]+)\)", r"FORMAT(\1, \2)", True),
+
+    # String extras
+    (r"BirtStr\.toProperCase\(([^)]+)\)", r"UPPER(LEFT(\1, 1)) & LOWER(MID(\1, 2, LEN(\1)))", True),
+    (r"BirtStr\.padLeft\(([^,]+),\s*(\d+),\s*([^)]+)\)", r"REPT(\3, \2 - LEN(\1)) & \1", True),
+    (r"BirtStr\.padRight\(([^,]+),\s*(\d+),\s*([^)]+)\)", r"\1 & REPT(\3, \2 - LEN(\1))", True),
+    (r"BirtStr\.contains\(([^,]+),\s*([^)]+)\)", r"CONTAINSSTRING(\1, \2)", True),
+    (r"BirtStr\.startsWith\(([^,]+),\s*([^)]+)\)", r"LEFT(\1, LEN(\2)) = \2", True),
+    (r"BirtStr\.endsWith\(([^,]+),\s*([^)]+)\)", r"RIGHT(\1, LEN(\2)) = \2", True),
+    (r"BirtStr\.substr\(([^,]+),\s*([^,]+),\s*([^)]+)\)", r"MID(\1, \2 + 1, \3)", True),
+    (r"BirtStr\.mid\(([^,]+),\s*([^,]+),\s*([^)]+)\)", r"MID(\1, \2, \3)", True),
+
+    # Date extras
+    (r"BirtDateTime\.firstDayOfMonth\(([^)]+)\)", r"DATE(YEAR(\1), MONTH(\1), 1)", True),
+    (r"BirtDateTime\.lastDayOfMonth\(([^)]+)\)", r"EOMONTH(\1, 0)", True),
+    (r"BirtDateTime\.firstDayOfYear\(([^)]+)\)", r"DATE(YEAR(\1), 1, 1)", True),
+    (r"BirtDateTime\.lastDayOfYear\(([^)]+)\)", r"DATE(YEAR(\1), 12, 31)", True),
+    (r"BirtDateTime\.addWeek\(([^,]+),\s*([^)]+)\)", r"DATEADD(\1, \2 * 7, DAY)", True),
+    (r"BirtDateTime\.addHour\(([^,]+),\s*([^)]+)\)", r"\1 + TIME(\2, 0, 0)", True),
+    (r"BirtDateTime\.addMinute\(([^,]+),\s*([^)]+)\)", r"\1 + TIME(0, \2, 0)", True),
+    (r"BirtDateTime\.addSecond\(([^,]+),\s*([^)]+)\)", r"\1 + TIME(0, 0, \2)", True),
+    (r"BirtDateTime\.diffHour\(([^,]+),\s*([^)]+)\)", r"INT((\2 - \1) * 24)", True),
+    (r"BirtDateTime\.diffMinute\(([^,]+),\s*([^)]+)\)", r"INT((\2 - \1) * 24 * 60)", True),
+    (r"BirtDateTime\.diffSecond\(([^,]+),\s*([^)]+)\)", r"INT((\2 - \1) * 24 * 60 * 60)", True),
+    (r"BirtDateTime\.fiscalYear\(([^,]+),\s*(\d+)\)", r"IF(MONTH(\1) >= \2, YEAR(\1) + 1, YEAR(\1))", True),
+    (r"BirtDateTime\.fiscalQuarter\(([^,]+),\s*(\d+)\)", r"INT(MOD(MONTH(\1) - \2 + 12, 12) / 3) + 1", True),
+
+    # Advanced aggregations
+    (r"Total\.first\(([^)]+)\)", r"FIRSTNONBLANK(\1, 1)", True),
+    (r"Total\.last\(([^)]+)\)", r"LASTNONBLANK(\1, 1)", True),
+    (r"Total\.movingAve\(([^,]+),\s*(\d+)\)", r"AVERAGEX(TOPN(\2, ALL(), [__row_number], DESC), \1)", True),
+    (r"Total\.percentile\(([^,]+),\s*([^)]+)\)", r"PERCENTILE.INC(\1, \2)", True),
+    (r"Total\.correlation\(([^,]+),\s*([^)]+)\)", r"DIVIDE(SUMX(ALL(), (\1 - AVERAGE(\1)) * (\2 - AVERAGE(\2))), SQRT(SUMX(ALL(), (\1 - AVERAGE(\1))^2) * SUMX(ALL(), (\2 - AVERAGE(\2))^2)))", True),
+    (r"Total\.isTopN\(([^,]+),\s*(\d+)\)", r"RANKX(ALL(), \1, , DESC) <= \2", True),
+    (r"Total\.isBottomN\(([^,]+),\s*(\d+)\)", r"RANKX(ALL(), \1, , ASC) <= \2", True),
+
+    # JavaScript Math → DAX
+    (r"Math\.round\(([^)]+)\)", r"ROUND(\1, 0)", True),
+    (r"Math\.ceil\(([^)]+)\)", r"CEILING(\1, 1)", True),
+    (r"Math\.floor\(([^)]+)\)", r"FLOOR(\1, 1)", True),
+    (r"Math\.abs\(([^)]+)\)", r"ABS(\1)", True),
+    (r"Math\.pow\(([^,]+),\s*([^)]+)\)", r"POWER(\1, \2)", True),
+    (r"Math\.sqrt\(([^)]+)\)", r"SQRT(\1)", True),
+    (r"Math\.log\(([^)]+)\)", r"LN(\1)", True),
+    (r"Math\.max\(([^,]+),\s*([^)]+)\)", r"MAX(\1, \2)", True),
+    (r"Math\.min\(([^,]+),\s*([^)]+)\)", r"MIN(\1, \2)", True),
+    (r"Math\.random\(\)", "RAND()", True),
+    (r"Math\.PI", "PI()", True),
+
+    # JavaScript String methods → DAX
+    (r"\.toUpperCase\(\)", r"UPPER(\g<0>)", False),
+    (r"\.toLowerCase\(\)", r"LOWER(\g<0>)", False),
+    (r"\.trim\(\)", r"TRIM(\g<0>)", False),
+
+    # Null / undefined handling
+    (r"null", "BLANK()", False),
+    (r"undefined", "BLANK()", False),
 ]
 
 # JavaScript operator → DAX operator

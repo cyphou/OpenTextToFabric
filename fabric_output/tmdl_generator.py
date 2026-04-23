@@ -145,7 +145,7 @@ class TMDLGenerator:
         files: dict[str, str] = {}
 
         # Model definition
-        model_tmdl = f'model Model\n    culture: en-US\n'
+        model_tmdl = 'model Model\n\tculture: en-US\n'
         files["model.tmdl"] = model_tmdl
 
         # Tables
@@ -159,60 +159,91 @@ class TMDLGenerator:
             for rel in self.relationships:
                 rel_tmdl += (
                     f"\nrelationship {rel['name']}\n"
-                    f"    fromColumn: {rel['fromTable']}.{rel['fromColumn']}\n"
-                    f"    toColumn: {rel['toTable']}.{rel['toColumn']}\n"
-                    f"    crossFilteringBehavior: {rel['crossFilteringBehavior']}\n"
+                    f"\tfromColumn: {rel['fromTable']}.{rel['fromColumn']}\n"
+                    f"\ttoColumn: {rel['toTable']}.{rel['toColumn']}\n"
+                    f"\tcrossFilteringBehavior: {rel['crossFilteringBehavior']}\n"
                 )
             files["relationships.tmdl"] = rel_tmdl
 
         return files
 
+    @staticmethod
+    def _quote_name(name: str) -> str:
+        """Quote a TMDL name if it contains special characters."""
+        if any(c in name for c in " ./-()'+@#$%^&*!~`<>?;:{}|\\,"):
+            return f"'{name}'"
+        return name
+
     def _table_to_tmdl(self, table: dict[str, Any]) -> str:
         """Convert table definition to TMDL format."""
-        lines = [f"table {table['name']}"]
-        lines.append(f"    lineageTag: {table['name']}")
+        tname = self._quote_name(table['name'])
+        lines = [f"table {tname}"]
+        lines.append(f"\tlineageTag: {table['name']}")
         lines.append("")
 
         # Columns
         for col in table.get("columns", []):
+            cname = self._quote_name(col['name'])
             col_type = col.get("type", "")
             if col_type == "calculated":
-                lines.append(f"    column {col['name']} =")
-                lines.append(f"        {col.get('expression', '')}")
+                expr = col.get('expression', '')
+                if '\n' in expr:
+                    lines.append(f"\tcolumn {cname} = ```")
+                    for expr_line in expr.split('\n'):
+                        lines.append(f"\t\t\t{expr_line}")
+                    lines.append("\t\t\t```")
+                else:
+                    lines.append(f"\tcolumn {cname} = {expr}")
             else:
-                lines.append(f"    column {col['name']}")
-            lines.append(f"        dataType: {col.get('dataType', 'string')}")
-            if col.get("sourceColumn"):
-                lines.append(f"        sourceColumn: {col['sourceColumn']}")
+                lines.append(f"\tcolumn {cname}")
+            lines.append(f"\t\tdataType: {col.get('dataType', 'string')}")
+            if col.get("sourceColumn") and col_type != "calculated":
+                lines.append(f"\t\tsourceColumn: {col['sourceColumn']}")
             if col.get("isHidden"):
-                lines.append("        isHidden")
+                lines.append("\t\tisHidden")
             if col.get("displayName"):
-                lines.append(f"        displayName: {col['displayName']}")
-            lines.append(f"        lineageTag: {col['name']}")
+                lines.append(f"\t\tdisplayName: {col['displayName']}")
+            lines.append(f"\t\tlineageTag: {col['name']}")
+            lines.append(f"\t\tsummarizeBy: none")
             lines.append("")
 
         # Measures for this table
         table_measures = [m for m in self.measures if m["table"] == table["name"]]
         for m in table_measures:
-            lines.append(f"    measure {m['name']} =")
-            lines.append(f"        {m['expression']}")
+            mname = self._quote_name(m['name'])
+            expr = m['expression']
+            if '\n' in expr:
+                lines.append(f"\tmeasure {mname} = ```")
+                for expr_line in expr.split('\n'):
+                    lines.append(f"\t\t\t{expr_line}")
+                lines.append("\t\t\t```")
+            else:
+                lines.append(f"\tmeasure {mname} = {expr}")
             if m.get("formatString"):
-                lines.append(f"        formatString: {m['formatString']}")
+                lines.append(f"\t\tformatString: {m['formatString']}")
             if m.get("displayFolder"):
-                lines.append(f"        displayFolder: {m['displayFolder']}")
-            lines.append(f"        lineageTag: {m['name']}")
+                lines.append(f"\t\tdisplayFolder: {m['displayFolder']}")
+            lines.append(f"\t\tlineageTag: {m['name']}")
             lines.append("")
 
         # Partition (M query source)
+        ds_name = table.get("data_source", "Source") or "Source"
+        part_name = self._quote_name(table['name'])
+        lines.append(f"\tpartition {part_name} = m")
+        lines.append("\t\tmode: import")
+        lines.append("\t\tsource =")
+        lines.append("\t\t\t\tlet")
+        lines.append(f'\t\t\t\t\tSource = #"{ds_name}"')
         if table.get("source_query"):
-            lines.append(f"    partition {table['name']}")
-            lines.append("        mode: import")
-            lines.append(f"        source = m")
-            lines.append(f'            let')
-            lines.append(f'                Source = #"{table.get("data_source", "Source")}"')
-            lines.append(f'            in')
-            lines.append(f'                Source')
-            lines.append("")
+            # Add native query step if SQL is available
+            sql = table['source_query'].replace('"', '""').replace('\n', ' ')
+            lines.append(f'\t\t\t\t\tQuery = Value.NativeQuery(Source, "{sql}", null, [EnableFolding=true])')
+            lines.append("\t\t\t\tin")
+            lines.append("\t\t\t\t\tQuery")
+        else:
+            lines.append("\t\t\t\tin")
+            lines.append("\t\t\t\t\tSource")
+        lines.append("")
 
         return "\n".join(lines)
 
