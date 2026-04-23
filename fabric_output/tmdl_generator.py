@@ -90,10 +90,27 @@ class TMDLGenerator:
         format_string: str = "",
         display_folder: str = "",
     ) -> dict[str, Any]:
-        """Add a DAX measure to a table."""
+        """Add a DAX measure to a table.
+
+        Skips if a column with the same name already exists on the table
+        (Power BI forbids duplicate names between columns and measures).
+        """
+        safe_table = sanitize_name(table_name)
+        safe_name = sanitize_name(measure_name)
+
+        # Check for column name conflict
+        for t in self.tables:
+            if t["name"] == safe_table:
+                if any(c["name"] == safe_name for c in t.get("columns", [])):
+                    logger.warning(
+                        "Skipping measure '%s' — column with same name exists on '%s'",
+                        safe_name, safe_table,
+                    )
+                    return {}
+
         measure = {
-            "table": sanitize_name(table_name),
-            "name": sanitize_name(measure_name),
+            "table": safe_table,
+            "name": safe_name,
             "expression": dax_expression,
             "formatString": format_string,
             "displayFolder": display_folder,

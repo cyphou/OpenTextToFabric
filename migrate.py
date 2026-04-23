@@ -321,6 +321,13 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress") -> None:
     table_names = {t["name"] for t in tmdl.tables}
     default_table = tmdl.tables[0]["name"] if tmdl.tables else "Measures"
 
+    # Build column name lookup per table (to avoid measure/column name conflicts)
+    table_column_names: dict[str, set[str]] = {}
+    for t in tmdl.tables:
+        table_column_names[t["name"]] = {
+            c["name"] for c in t.get("columns", [])
+        }
+
     # Add converted DAX measures
     for conv in converted:
         dax = conv.get("converted", "")
@@ -342,6 +349,12 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress") -> None:
                 table = parts[1]
 
         name = conv.get("column_name", "") or f"Measure_{len(tmdl.measures) + 1}"
+
+        # Skip if a column with the same name already exists on this table
+        # (PBI forbids a measure and column with the same name)
+        if name in table_column_names.get(table, set()):
+            continue
+
         tmdl.add_measure(table, name, dax)
 
     tmdl.export(str(project_dir))
