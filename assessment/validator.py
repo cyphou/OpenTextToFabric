@@ -31,6 +31,9 @@ class MigrationValidator:
         checks.append(self._check_visual_count(out))
         checks.append(self._check_measure_count(out))
         checks.append(self._check_platform_files(out))
+        checks.append(self._check_duplicate_columns(out))
+        checks.append(self._check_ambiguous_relationships(out))
+        checks.append(self._check_relationship_tables(out))
 
         passed = sum(1 for c in checks if c["status"] == "pass")
         failed = sum(1 for c in checks if c["status"] == "fail")
@@ -45,9 +48,15 @@ class MigrationValidator:
         }
 
     def _check_intermediate_jsons(self, out: Path) -> dict[str, Any]:
-        """Verify all required intermediate JSON files exist."""
+        """Verify all required intermediate JSON files exist.
+
+        Checks both the root directory and ``extraction/`` subfolder.
+        """
         required = ["datasets.json", "connections.json", "visuals.json", "expressions.json"]
-        missing = [f for f in required if not (out / f).exists()]
+        # JSON files may be in root or in extraction/ subfolder
+        extraction_dir = out / "extraction"
+        base = extraction_dir if extraction_dir.is_dir() else out
+        missing = [f for f in required if not (base / f).exists()]
         if missing:
             return {
                 "check": "intermediate_jsons",
@@ -153,3 +162,118 @@ class MigrationValidator:
             return []
         with open(path, encoding="utf-8") as f:
             return json.load(f)
+
+    # ── TMDL-specific validation checks ──────────────────────────────
+
+    def _check_duplicate_columns(self, out: Path) -> dict[str, Any]:
+        """Check for duplicate column definitions within each table TMDL file.
+
+        Power BI rejects TMDL when a table declares the same column (or the
+        same property like ``dataType``) more than once.
+        """
+        import re
+        duplicates: list[str] = []
+        for tmdl_file in out.rglob("*.tmdl"):
+            if tmdl_file.name == "model.tmdl" or tmdl_file.name == "relationships.tmdl":
+                continue
+            content = tmdl_file.read_text(encoding="utf-8")
+            # Extract column names
+            col_names = re.findall(r"^\tcolumn\s+(?:'([^']+)'|(\S+))", content, re.MULTILINE)
+            names = [m[0] or m[1] for m in col_names]
+            seen: set[str] = set()
+            for name in names:
+                if name in seen:
+                    duplicates.append(f"{tmdl_file.stem}:{name}")
+                seen.add(name)
+
+        if duplicates:
+            return {
+                "check": "duplicate_columns",
+                "status": "fail",
+                "detail": f"Duplicate columns: {duplicates}",
+            }
+        return {
+            "check": "duplicate_columns",
+            "status": "pass",
+            "detail": "No duplicate columns",
+        }
+
+    def _check_ambiguous_relationships(self, out: Path) -> dict[str, Any]:
+        """Check for ambiguous paths — multiple relationships between same table pair.
+
+        Power BI only allows one active relationship between any two tables.
+        Multiple relationships create "ambiguous paths" errors.
+        """
+        import re
+        rel_file = None
+        for f in out.rglob("relationships.tmdl"):
+            rel_file = f
+            break
+        if not rel_file:
+            return {
+                "check": "ambiguous_relationships",
+                "status": "pass",
+                "detail": "No relationships file (nothing to check)",
+            }
+
+        content = rel_file.read_text(encoding="utf-8")
+
+        # Parse relationships: fromColumn lines contain table.column
+        from_entries = re.findall(r"fromColumn:\s+(\S+)\.(\S+)", content)
+        to_entries = re.findall(r"toColumn:\s+(\S+)\.(\S+)", content)
+
+        pair_count: dict[tuple[str, str], int] = {}
+        for (from_table, _), (to_table, _) in zip(from_entries, to_entries):
+            pair = (min(from_table, to_table), max(from_table, to_table))
+            pair_count[pair] = pair_count.get(pair, 0) + 1
+
+        ambiguous = {pair: cnt for pair, cnt in pair_count.items() if cnt > 1}
+        if ambiguous:
+            details = [f"{a}->{b} ({cnt} rels)" for (a, b), cnt in ambiguous.items()]
+            return {
+                "check": "ambiguous_relationships",
+                "status": "fail",
+                "detail": f"Ambiguous paths: {'; '.join(details)}",
+            }
+        return {
+            "check": "ambiguous_relationships",
+            "status": "pass",
+            "detail": f"{len(pair_count)} relationship pair(s), no ambiguity",
+        }
+
+    def _check_relationship_tables(self, out: Path) -> dict[str, Any]:
+        """Verify all tables referenced in relationships actually exist as TMDL files."""
+        import re
+        rel_file = None
+        for f in out.rglob("relationships.tmdl"):
+            rel_file = f
+            break
+        if not rel_file:
+            return {
+                "check": "relationship_tables",
+                "status": "pass",
+                "detail": "No relationships file",
+            }
+
+        content = rel_file.read_text(encoding="utf-8")
+        ref_tables: set[str] = set()
+        for match in re.findall(r"(?:fromColumn|toColumn):\s+(\S+)\.\S+", content):
+            ref_tables.add(match)
+
+        tables_dir = rel_file.parent / "tables"
+        existing = set()
+        if tables_dir.exists():
+            existing = {f.stem for f in tables_dir.glob("*.tmdl")}
+
+        missing = ref_tables - existing
+        if missing:
+            return {
+                "check": "relationship_tables",
+                "status": "fail",
+                "detail": f"Missing table files for: {sorted(missing)}",
+            }
+        return {
+            "check": "relationship_tables",
+            "status": "pass",
+            "detail": f"All {len(ref_tables)} referenced table(s) exist",
+        }

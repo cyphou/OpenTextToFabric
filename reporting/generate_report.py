@@ -583,3 +583,315 @@ def generate_report(
 
     logger.info("Migration report generated: %s", report_path)
     return str(rp)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Batch report — consolidated dashboard for multiple reports
+# ═══════════════════════════════════════════════════════════════════════
+
+def generate_batch_report(
+    report_dirs: list[str],
+    batch_results: list[dict],
+    output_dir: str,
+    report_path: str | None = None,
+) -> str:
+    """Generate a consolidated HTML dashboard for a batch migration.
+
+    Aggregates fidelity data from each individual report sub-directory and
+    produces a single portfolio-level HTML file.
+
+    Args:
+        report_dirs: Paths to each report's output sub-directory.
+        batch_results: Per-report status dicts (report, status, error?).
+        output_dir: Root output directory for the batch.
+        report_path: Override for the output HTML path.
+
+    Returns:
+        Path to the generated HTML file.
+    """
+    out = Path(output_dir)
+    if not report_path:
+        report_path = str(out / "MIGRATION_REPORT.html")
+
+    # Collect per-report data
+    per_report: list[dict[str, Any]] = []
+    combined = MigrationReport()
+
+    for rdir in report_dirs:
+        rd = Path(rdir)
+        # report_dirs may point to extraction/ subfolder — derive name from parent
+        name = rd.parent.name if rd.name == "extraction" else rd.name
+        result_entry = next(
+            (r for r in batch_results if Path(r.get("report", "")).stem == name),
+            {"report": name, "status": "unknown"},
+        )
+
+        report = _build_report(rd) if rd.exists() else MigrationReport()
+        fidelity = report.overall_fidelity()
+        counts = report.status_counts()
+
+        # Expression stats from the migration pipeline
+        expr_stats = result_entry.get("expressions", {})
+
+        # Validation results from the migration pipeline
+        validation = result_entry.get("validation", {})
+
+        per_report.append({
+            "name": name,
+            "status": result_entry.get("status", "unknown"),
+            "error": result_entry.get("error", ""),
+            "traceback": result_entry.get("traceback", ""),
+            "fidelity": fidelity,
+            "total": len(report.items),
+            "exact": counts.get(EXACT, 0),
+            "approximate": counts.get(APPROXIMATE, 0),
+            "unsupported": counts.get(UNSUPPORTED, 0),
+            "skipped": counts.get(SKIPPED, 0),
+            "expr_total": expr_stats.get("total", 0),
+            "expr_success": expr_stats.get("success", 0),
+            "expr_partial": expr_stats.get("partial", 0),
+            "expr_unsupported": expr_stats.get("unsupported", 0),
+            "validation": validation,
+            "report": report,
+        })
+
+        # Merge into combined report (prefix category with report name)
+        for item in report.items:
+            combined.add(
+                name=item.name,
+                category=item.category,
+                status=item.status,
+                source_type=item.source_type,
+                details=f"[{name}] {item.details}" if item.details else f"[{name}]",
+            )
+
+    total_reports = len(per_report)
+    successes = sum(1 for r in per_report if r["status"] == "success")
+    failures = sum(1 for r in per_report if r["status"] == "failed")
+    skipped = total_reports - successes - failures
+    overall_fidelity = combined.overall_fidelity()
+    total_items = len(combined.items)
+    total_expr = sum(r["expr_total"] for r in per_report)
+    total_expr_ok = sum(r["expr_success"] for r in per_report)
+    total_expr_partial = sum(r["expr_partial"] for r in per_report)
+    total_expr_unsupported = sum(r["expr_unsupported"] for r in per_report)
+
+    # Save JSON sidecar
+    combined.save(out / "migration_report.json")
+
+    # ── Assemble HTML ─────────────────────────────────────────────────
+    html = html_open(
+        title="OpenText → Fabric Batch Migration Report",
+        subtitle=f"{total_reports} reports migrated — consolidated dashboard",
+        version=VERSION,
+    )
+
+    # ── Executive summary ─────────────────────────────────────────────
+    html += section_open("exec-summary", "Executive Summary", "&#128202;")
+    html += stat_grid([
+        stat_card(total_reports, "Reports", accent="blue"),
+        stat_card(successes, "Success", accent="success"),
+        stat_card(failures, "Failed", accent="fail"),
+        stat_card(skipped, "Skipped", accent="purple"),
+        stat_card(total_items, "Total Items", accent="blue"),
+        stat_card(
+            f"{overall_fidelity:.1f}%", "Overall Fidelity",
+            accent="success" if overall_fidelity >= 95 else "warn" if overall_fidelity >= 80 else "fail",
+        ),
+    ])
+
+    # Expression conversion summary
+    html += stat_grid([
+        stat_card(total_expr, "Expressions", accent="blue"),
+        stat_card(total_expr_ok, "Converted (exact)", accent="success"),
+        stat_card(total_expr_partial, "Partial", accent="warn"),
+        stat_card(total_expr_unsupported, "Unsupported", accent="fail"),
+    ])
+
+    # Status donut + expression donut
+    html += '<div class="chart-row">\n'
+
+    # Batch status donut
+    status_segments = []
+    if successes:
+        status_segments.append(("Success", successes, SUCCESS))
+    if failures:
+        status_segments.append(("Failed", failures, FAIL))
+    if skipped:
+        status_segments.append(("Skipped", skipped, "#a19f9d"))
+    if status_segments:
+        html += '<div class="chart-card"><h4>Batch Status</h4>\n'
+        html += donut_chart(status_segments, center_text=str(total_reports))
+        html += '\n</div>\n'
+
+    # Expression conversion donut
+    expr_segments = []
+    if total_expr_ok:
+        expr_segments.append(("Exact", total_expr_ok, SUCCESS))
+    if total_expr_partial:
+        expr_segments.append(("Partial", total_expr_partial, WARN))
+    if total_expr_unsupported:
+        expr_segments.append(("Unsupported", total_expr_unsupported, FAIL))
+    if expr_segments:
+        html += '<div class="chart-card"><h4>Expression Conversion</h4>\n'
+        html += donut_chart(expr_segments, center_text=str(total_expr))
+        html += '\n</div>\n'
+
+    html += '</div>\n'
+
+    html += section_close()
+
+    # ── Per-report summary table ──────────────────────────────────────
+    html += section_open("reports", "Report Details", "&#128196;")
+    rows = []
+    for r in per_report:
+        status_badge = badge(r["status"])
+        expr_text = f"{r['expr_success']}/{r['expr_total']}"
+        if r["expr_partial"]:
+            expr_text += f" ({r['expr_partial']} partial)"
+        rows.append([
+            f"<strong>{esc(r['name'])}</strong>",
+            status_badge,
+            str(r["total"]),
+            str(r["exact"]),
+            str(r["approximate"]),
+            str(r["unsupported"]),
+            expr_text,
+            fidelity_bar(r["fidelity"]),
+        ])
+    html += data_table(
+        headers=["Report", "Status", "Items", "Exact", "Approx", "Unsupported", "Expressions", "Fidelity"],
+        rows=rows,
+        table_id="tbl-reports",
+        sortable=True,
+    )
+    html += section_close()
+
+    # ── Errors section (if any failures) ──────────────────────────────
+    failed = [r for r in per_report if r["status"] == "failed"]
+    if failed:
+        html += section_open("errors", "Errors", "&#9888;")
+        for r in failed:
+            error_msg = esc(r.get("error", "Unknown error"))
+            tb = r.get("traceback", "")
+            content = f'<p class="error-msg"><strong>Error:</strong> {error_msg}</p>'
+            if tb:
+                content += f'<details><summary>Traceback</summary><pre>{esc(tb)}</pre></details>'
+            html += card(title=r["name"], content=content)
+        html += section_close()
+
+    # ── Validation section ────────────────────────────────────────────
+    validated = [r for r in per_report if r.get("validation")]
+    if validated:
+        total_checks = sum(len(r["validation"].get("checks", [])) for r in validated)
+        total_pass = sum(r["validation"].get("passed", 0) for r in validated)
+        total_fail = sum(r["validation"].get("failed", 0) for r in validated)
+        total_warn = sum(r["validation"].get("warnings", 0) for r in validated)
+
+        html += section_open("validation", "Post-Migration Validation", "&#9989;")
+        html += stat_grid([
+            stat_card(total_checks, "Total Checks", accent="blue"),
+            stat_card(total_pass, "Passed", accent="success"),
+            stat_card(total_fail, "Failed", accent="fail"),
+            stat_card(total_warn, "Warnings", accent="warn"),
+        ])
+
+        vrows = []
+        for r in validated:
+            for chk in r["validation"].get("checks", []):
+                vrows.append([
+                    f"<strong>{esc(r['name'])}</strong>",
+                    esc(chk.get("check", "")),
+                    badge(chk["status"]),
+                    esc(chk.get("detail", "")),
+                ])
+        html += data_table(
+            headers=["Report", "Check", "Status", "Detail"],
+            rows=vrows,
+            table_id="tbl-validation",
+            sortable=True,
+            searchable=True,
+        )
+        html += section_close()
+
+    # ── Aggregated category fidelity ──────────────────────────────────
+    html += section_open("categories", "Aggregated Fidelity by Category", "&#128295;")
+    cat_rows = []
+    for cat in combined.categories():
+        cat_counts = combined.status_counts(cat)
+        cat_fid = combined.category_fidelity(cat)
+        cat_total = sum(cat_counts.values())
+        cat_rows.append([
+            f"<strong>{esc(cat.title())}</strong>",
+            str(cat_total),
+            str(cat_counts.get(EXACT, 0)),
+            str(cat_counts.get(APPROXIMATE, 0)),
+            str(cat_counts.get(UNSUPPORTED, 0)),
+            fidelity_bar(cat_fid),
+        ])
+    html += data_table(
+        headers=["Category", "Items", "Exact", "Approx", "Unsupported", "Fidelity"],
+        rows=cat_rows,
+        table_id="tbl-categories",
+        sortable=True,
+    )
+    html += section_close()
+
+    # ── Per-report detail sections ────────────────────────────────────
+    for r in per_report:
+        report: MigrationReport = r["report"]
+        if not report.items and r["status"] != "failed":
+            continue
+        html += section_open(
+            f"detail-{r['name']}", f"Details: {r['name']}", "&#128200;",
+            collapsed=True,
+        )
+
+        if r["status"] == "failed":
+            error_msg = esc(r.get("error", "Unknown error"))
+            html += f'<div class="error-msg" style="color:#d13438;padding:8px;margin-bottom:12px;border-left:3px solid #d13438"><strong>Error:</strong> {error_msg}</div>'
+            html += section_close()
+            continue
+
+        exprs = report.by_category("expressions")
+        visuals = report.by_category("visuals")
+        datasets = report.by_category("datasets")
+        html += stat_grid([
+            stat_card(r["expr_total"], "Expressions", accent="blue"),
+            stat_card(r["expr_success"], "Exact", accent="success"),
+            stat_card(r["expr_partial"], "Partial", accent="warn"),
+            stat_card(r["expr_unsupported"], "Unsupported", accent="fail"),
+            stat_card(len(visuals), "Visuals", accent="teal"),
+            stat_card(len(datasets), "Datasets", accent="purple"),
+            stat_card(
+                f"{r['fidelity']:.1f}%", "Fidelity",
+                accent="success" if r["fidelity"] >= 95 else "warn" if r["fidelity"] >= 80 else "fail",
+            ),
+        ])
+
+        # Expression detail table
+        if exprs:
+            erows = [
+                [f'<code>{esc(e.name)}</code>', badge(e.status), f'<code>{esc(e.details[:80])}</code>' if e.details else "—"]
+                for e in exprs
+            ]
+            html += data_table(
+                headers=["Expression", "Status", "DAX"],
+                rows=erows,
+                table_id=f"tbl-expr-{r['name']}",
+                sortable=True,
+                searchable=True,
+            )
+
+        html += section_close()
+
+    html += html_close(version=VERSION)
+
+    # Write
+    rp = Path(report_path)
+    rp.parent.mkdir(parents=True, exist_ok=True)
+    with open(rp, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    logger.info("Batch migration report generated: %s", report_path)
+    return str(rp)

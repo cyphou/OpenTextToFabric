@@ -6,16 +6,16 @@ This project uses a **10-agent specialization model** adapted from the [TableauT
 
 | Agent | Invoke When | Owns |
 |-------|-------------|------|
-| **@orchestrator** | Pipeline coordination, CLI, batch, resume/retry | `migrate.py`, `config.py`, `progress.py`, `batch_runner.py` |
-| **@extractor** | OpenText API integration, metadata parsing | `opentext_extract/*.py` (api_client, content_server, documentum, birt_parser) |
+| **@orchestrator** | Pipeline coordination, CLI, batch, resume/retry | `migrate.py`, `config.py`, `progress.py`, `security.py` |
+| **@extractor** | OpenText API integration, metadata parsing | `opentext_extract/*.py` (api_client, content_server, documentum, birt_parser, ihub_client) |
 | **@content** | Document binaries, renditions, OCR, version history | `content_handler/*.py` (downloader, renditions, versioning, ocr_client) |
-| **@report** | BIRT .rptdesign → Power BI visual/expression mapping | `report_converter/*.py` (birt_parser, expression_converter, visual_mapper) |
-| **@semantic** | TMDL semantic model, relationships, hierarchies | `fabric_output/tmdl_generator.py`, `fabric_output/m_query_generator.py` |
+| **@report** | BIRT .rptdesign → PBI visual/expression mapping | `report_converter/*.py` (expression_converter, visual_mapper, pbip_generator, conditional_format, drill_through, multi_datasource, dax_optimizer, plugins) |
+| **@semantic** | TMDL semantic model, relationships, hierarchies | `fabric_output/tmdl_generator.py`, `fabric_output/m_query_generator.py`, `fabric_output/dax_recipes.py` |
 | **@pipeline** | Fabric pipelines, Dataflows, PySpark Notebooks, Lakehouse DDL | `fabric_output/lakehouse_generator.py`, `fabric_output/pipeline_generator.py`, `fabric_output/notebook_generator.py`, `fabric_output/dataflow_generator.py` |
-| **@governance** | Permissions (ACL→RLS), classifications, Purview, audit trail | `governance/*.py` (acl_mapper, classification_mapper, purview_mapper, audit) |
-| **@assessor** | Readiness scoring, gap analysis, strategy, validation | `assessment/*.py` (scanner, complexity, readiness_report, validator) |
-| **@deployer** | Fabric deployment, workspace provisioning, OneLake upload | `deploy/*.py` (auth, fabric_client, deployer, onelake_client) |
-| **@tester** | Tests, coverage, fixtures, regression | `tests/*.py` |
+| **@governance** | Permissions (ACL→RLS), classifications, Purview, audit trail | `governance/*.py` (acl_mapper, classification_mapper, purview_mapper, audit, security_validator) |
+| **@assessor** | Readiness scoring, gap analysis, strategy, validation | `assessment/*.py` (scanner, complexity, readiness_report, validator, strategy_advisor) |
+| **@deployer** | Fabric deployment, workspace provisioning, OneLake upload | `deploy/*.py` (auth, fabric_client, deployer, onelake_client, multi_tenant, refresh_gateway) |
+| **@tester** | Tests, coverage, fixtures, regression | `tests/*.py` (44 test files, 816 tests) |
 
 ## Architecture Diagram
 
@@ -103,13 +103,13 @@ This project uses a **10-agent specialization model** adapted from the [TableauT
 ## Agent Domain Details
 
 ### @orchestrator — Pipeline Coordinator
-- **Owns:** `migrate.py`, `config.py`, `progress.py`, `batch_runner.py`, `incremental.py`
-- **Responsibility:** CLI parsing, pipeline sequencing, batch mode, resume/retry, progress tracking
+- **Owns:** `migrate.py`, `config.py`, `progress.py`, `security.py`, `reporting/*.py` (generate_report, html_template, migration_report, telemetry, regression, incremental)
+- **Responsibility:** CLI parsing, pipeline sequencing, batch mode, resume/retry, progress tracking, telemetry collection, migration reporting, regression detection, incremental sync, SLA tracking
 - **Delegates to:** All other agents based on `--source-type` flag
 
 ### @extractor — OpenText API Integration
-- **Owns:** `opentext_extract/api_client.py`, `opentext_extract/content_server.py`, `opentext_extract/documentum_client.py`, `opentext_extract/birt_parser.py`
-- **Responsibility:** REST API authentication, session management, pagination, rate limiting, metadata extraction
+- **Owns:** `opentext_extract/api_client.py`, `opentext_extract/content_server.py`, `opentext_extract/documentum_client.py`, `opentext_extract/birt_parser.py`, `opentext_extract/ihub_client.py`
+- **Responsibility:** REST API authentication, session management, pagination, rate limiting, metadata extraction, iHub report server integration
 - **APIs:**
   - Content Server REST v2 (`/api/v2/nodes`, `/api/v2/members`, `/api/v2/workflows`)
   - Documentum REST Services (`/repositories/{repo}/objects`, `/dql`)
@@ -122,19 +122,24 @@ This project uses a **10-agent specialization model** adapted from the [TableauT
 - **Key concerns:** Chunked transfer, resume on failure, checksum validation, temp storage management
 
 ### @report — BIRT Report Converter
-- **Owns:** `report_converter/birt_parser.py`, `report_converter/expression_converter.py`, `report_converter/visual_mapper.py`, `report_converter/pbip_generator.py`
+- **Owns:** `report_converter/expression_converter.py`, `report_converter/visual_mapper.py`, `report_converter/pbip_generator.py`, `report_converter/conditional_format.py`, `report_converter/drill_through.py`, `report_converter/multi_datasource.py`, `report_converter/dax_optimizer.py`, `report_converter/plugins.py`
 - **Responsibility:** .rptdesign XML → Power BI report conversion
 - **Mappings:**
-  - BIRT JavaScript expressions → DAX formulas
+  - BIRT JavaScript expressions → DAX formulas (80+ conversions)
   - BIRT data source (JDBC) → Power Query M
-  - BIRT tables/charts/crosstabs → PBI table/matrix/chart visuals
+  - BIRT tables/charts/crosstabs → PBI table/matrix/chart visuals (140+ mappings)
   - BIRT parameters → PBI slicers/filters
   - BIRT styles → PBI theme JSON
+  - BIRT highlight rules → PBI conditional formatting
+  - BIRT sub-reports → drill-through pages
+  - Multi-data-source → composite model
+  - DAX optimization (IF→SWITCH, ISBLANK→COALESCE, time intelligence injection)
+  - Plugin system for custom visual mapping and DAX post-processing
 
 ### @semantic — Semantic Model Specialist
-- **Owns:** `fabric_output/tmdl_generator.py`, `fabric_output/m_query_generator.py`
+- **Owns:** `fabric_output/tmdl_generator.py`, `fabric_output/m_query_generator.py`, `fabric_output/dax_recipes.py`
 - **Responsibility:** Generate TMDL semantic model from BIRT datasets or migrated Lakehouse tables
-- **Output:** TMDL files (tables, columns, measures, relationships, hierarchies, RLS roles)
+- **Output:** TMDL files (tables, columns, measures, relationships, hierarchies, calculation groups, RLS roles, industry-specific DAX recipe templates)
 
 ### @pipeline — Fabric Artifact Generator
 - **Owns:** `fabric_output/lakehouse_generator.py`, `fabric_output/pipeline_generator.py`, `fabric_output/notebook_generator.py`, `fabric_output/dataflow_generator.py`, `fabric_output/fabric_constants.py`
@@ -166,7 +171,7 @@ This project uses a **10-agent specialization model** adapted from the [TableauT
   - Post-migration validation (completeness, accuracy)
 
 ### @deployer — Fabric Deployment
-- **Owns:** `deploy/auth.py`, `deploy/fabric_client.py`, `deploy/deployer.py`, `deploy/onelake_client.py`
+- **Owns:** `deploy/auth.py`, `deploy/fabric_client.py`, `deploy/deployer.py`, `deploy/onelake_client.py`, `deploy/multi_tenant.py`, `deploy/refresh_gateway.py`
 - **Responsibility:** Deploy generated artifacts to Fabric
 - **Capabilities:**
   - Azure AD auth (Service Principal + Managed Identity)
@@ -174,6 +179,10 @@ This project uses a **10-agent specialization model** adapted from the [TableauT
   - OneLake file upload (ADLS Gen2 API)
   - Power BI REST API (.pbip import)
   - Capacity management (auto-scale awareness)
+  - Multi-tenant deployment (template-based workspace creation, per-tenant substitutions)
+  - Bundle deployment (shared semantic model + thin reports)
+  - Refresh schedule generation (BIRT/iHub/cron → PBI refresh configuration)
+  - Gateway configuration (JDBC → PBI gateway bindings)
 
 ### @tester — Test Suite
 - **Owns:** `tests/*.py`

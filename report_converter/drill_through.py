@@ -221,3 +221,86 @@ def generate_drill_page_json(
         "type": 1,  # Drill-through page type
         "filters": filters_json,
     }
+
+
+def generate_page_navigator(
+    pages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Generate a page navigator visual config for multi-page reports.
+
+    Creates a navigation bar visual that links to all pages. Useful when
+    migrating BIRT reports with many sub-reports or drill-through targets.
+
+    Args:
+        pages: List of page configs (each must have 'name' and 'displayName').
+
+    Returns:
+        PBI visual config for page navigation.
+    """
+    buttons: list[dict[str, Any]] = []
+    for page in pages:
+        buttons.append({
+            "name": page.get("displayName", page.get("name", "")),
+            "target_page": page.get("name", ""),
+            "type": "pageNavigation",
+        })
+
+    return {
+        "visual_type": "pageNavigator",
+        "name": "PageNavigator",
+        "position": {"x": 0, "y": 0, "z": 1000},
+        "size": {"width": 1280, "height": 40},
+        "config": {
+            "buttons": buttons,
+            "orientation": "horizontal",
+            "style": "tabs",
+        },
+    }
+
+
+class DrillPageBuilder:
+    """Builds complete drill-through pages with visuals for PBIP output.
+
+    Integrates with PBIPGenerator to add drill-through pages to the report.
+    """
+
+    def __init__(self, converter: DrillThroughConverter | None = None):
+        self.converter = converter or DrillThroughConverter()
+
+    def build_pages(
+        self,
+        hyperlinks: list[dict[str, Any]],
+        subreports: list[dict[str, Any]],
+        visuals_by_page: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build drill-through page definitions from hyperlinks and sub-reports.
+
+        Args:
+            hyperlinks: BIRT hyperlink actions.
+            subreports: BIRT sub-report inclusions.
+            visuals_by_page: Optional mapping of page name → visuals for that page.
+
+        Returns:
+            List of complete page definitions for PBIP generation.
+        """
+        pages: list[dict[str, Any]] = []
+
+        # Convert hyperlinks → drill pages
+        if hyperlinks:
+            result = self.converter.convert_hyperlinks(hyperlinks)
+            for i, drill in enumerate(result.get("drill_pages", [])):
+                page = generate_drill_page_json(drill, page_index=i + 1)
+                page["visuals"] = (visuals_by_page or {}).get(drill.get("name", ""), [])
+                pages.append(page)
+
+        # Convert sub-reports → drill pages
+        if subreports:
+            sub_pages = self.converter.convert_subreports(subreports)
+            offset = len(pages)
+            for i, sub in enumerate(sub_pages):
+                page = generate_drill_page_json(sub, page_index=offset + i + 1)
+                page["visuals"] = (visuals_by_page or {}).get(sub.get("name", ""), [])
+                pages.append(page)
+
+        logger.info("Built %d drill-through pages", len(pages))
+        return pages

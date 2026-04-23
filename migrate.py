@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import re
 import sys
 
 logger = logging.getLogger(__name__)
@@ -284,8 +285,18 @@ def _generate_fabric(output_dir: str, progress: "MigrationProgress") -> None:
     step.complete()
 
 
-def _generate_pbip(output_dir: str, progress: "MigrationProgress") -> None:
-    """Generate Power BI report from BIRT extraction."""
+def _generate_pbip(output_dir: str, progress: "MigrationProgress", report_name: str | None = None, project_dir: str | None = None) -> dict:
+    """Generate Power BI report from BIRT extraction.
+
+    Args:
+        output_dir: Directory containing extraction JSON files.
+        progress: Migration progress tracker.
+        report_name: Name for the report (defaults to output_dir folder name).
+        project_dir: Directory to write the .pbip project into (defaults to output_dir).
+
+    Returns:
+        Expression conversion statistics dict.
+    """
     import json
     from pathlib import Path
     from report_converter.expression_converter import ExpressionConverter
@@ -297,9 +308,12 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress") -> None:
     step = progress.add_step("pbip_generation")
     step.start()
 
-    report_name = "MigratedReport"
     out = Path(output_dir)
-    project_dir = out / report_name  # .pbip project root
+    if not report_name:
+        report_name = out.name
+    proj_out = Path(project_dir) if project_dir else out
+    proj_out.mkdir(parents=True, exist_ok=True)
+    pbip_dir = proj_out / report_name  # .pbip project root
 
     # Load extracted data
     datasets = _load_json(out / "datasets.json")
@@ -338,8 +352,38 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress") -> None:
         if dax.startswith("[") and dax.endswith("]") and dax.count("[") == 1:
             continue
 
-        # Resolve table from source context (e.g. "dataset:SalesData")
+        # Skip literal values — string constants, booleans, and bare numbers
+        # are label texts / button captions, not real measures.
+        dax_stripped = dax.strip()
+        if (
+            (dax_stripped.startswith('"') and dax_stripped.endswith('"'))
+            or (dax_stripped.startswith("'") and dax_stripped.endswith("'"))
+            or dax_stripped.lower() in ("true", "false", "null", "blank()")
+            or dax_stripped.replace(".", "", 1).replace("-", "", 1).isdigit()
+        ):
+            continue
+
+        # Skip expressions from structural/layout elements (not data-bearing)
         source = conv.get("source", "")
+        source_type = source.split(":")[0] if ":" in source else ""
+        source_element = source.split(":")[1] if source.count(":") >= 2 else ""
+        if source_element in ("grid", "row", "cell", "column",
+                              "header", "footer", "detail"):
+            continue
+
+        # Require a meaningful name — skip unnamed expressions
+        name = conv.get("column_name", "")
+        if not name:
+            continue
+
+        # Skip self-referencing expressions (display formatting like
+        # dataSetRow["X"]/100 → [X]/100 where X is the measure's own name).
+        # These create circular dependencies in DAX.
+        _refs = re.findall(r"\[([^\]]+)\]", dax)
+        if _refs and all(r == name for r in _refs):
+            continue
+
+        # Resolve table from source context (e.g. "element:table:SalesData")
         table = default_table
         if ":" in source:
             parts = source.split(":")
@@ -349,8 +393,6 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress") -> None:
             elif parts[0] == "dataset" and len(parts) > 1 and parts[1] in table_names:
                 table = parts[1]
 
-        name = conv.get("column_name", "") or f"Measure_{len(tmdl.measures) + 1}"
-
         # Skip if a column with the same name already exists on this table
         # (PBI forbids a measure and column with the same name)
         if name in table_column_names.get(table, set()):
@@ -358,7 +400,7 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress") -> None:
 
         tmdl.add_measure(table, name, dax)
 
-    tmdl.export(str(project_dir))
+    tmdl.export(str(pbip_dir))
 
     # Generate M queries
     mq = MQueryGenerator()
@@ -370,9 +412,22 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress") -> None:
 
     # Generate PBIP project
     pbip = PBIPGenerator(report_name=report_name)
-    pbip.generate(pbi_visuals, output_dir=output_dir)
+    pbip.generate(pbi_visuals, output_dir=str(proj_out))
+
+    # Compute expression stats
+    total_expr = len(converted)
+    expr_success = sum(1 for r in converted if r.get("status") == "success")
+    expr_partial = sum(1 for r in converted if r.get("status") == "partial")
+    expr_unsupported = sum(1 for r in converted if r.get("status") == "unsupported")
+    expr_stats = {
+        "total": total_expr,
+        "success": expr_success,
+        "partial": expr_partial,
+        "unsupported": expr_unsupported,
+    }
 
     step.complete()
+    return expr_stats
 
 
 def _load_json(path: "Path") -> list:
@@ -467,22 +522,53 @@ def _run_batch(
             continue
 
         report_out = str(out / rpt.stem)
+        extraction_dir = str(out / rpt.stem / "extraction")
         logger.info("Processing %s → %s", rpt.name, report_out)
 
         try:
             from opentext_extract.birt_parser import BIRTParser
 
             parser = BIRTParser(rpt)
-            parser.export_json(report_out)
+            parser.export_json(extraction_dir)
 
+            expr_stats: dict = {}
             if args.output_format in ("pbip", "both"):
-                _generate_pbip(report_out, progress)
+                expr_stats = _generate_pbip(
+                    extraction_dir, progress,
+                    report_name=rpt.stem, project_dir=report_out,
+                )
+
+            # Post-migration validation
+            from assessment.validator import MigrationValidator
+            validator = MigrationValidator()
+            validation = validator.validate(report_out)
+            if not validation["valid"]:
+                failed_checks = [
+                    c for c in validation["checks"] if c["status"] == "fail"
+                ]
+                for fc in failed_checks:
+                    logger.warning(
+                        "Validation issue in %s: [%s] %s",
+                        rpt.name, fc["check"], fc["detail"],
+                    )
 
             completed.add(rpt.name)
-            results.append({"report": rpt.name, "status": "success"})
+            results.append({
+                "report": rpt.name,
+                "status": "success",
+                "expressions": expr_stats,
+                "validation": validation,
+            })
         except Exception as e:
-            logger.error("Failed to process %s: %s", rpt.name, e)
-            results.append({"report": rpt.name, "status": "failed", "error": str(e)})
+            import traceback
+            tb = traceback.format_exc()
+            logger.error("Failed to process %s: %s\n%s", rpt.name, e, tb)
+            results.append({
+                "report": rpt.name,
+                "status": "failed",
+                "error": str(e),
+                "traceback": tb,
+            })
 
         # Save checkpoint after each report
         with open(checkpoint_path, "w", encoding="utf-8") as f:
@@ -491,6 +577,18 @@ def _run_batch(
     successes = sum(1 for r in results if r["status"] == "success")
     failures = sum(1 for r in results if r["status"] == "failed")
     logger.info("Batch complete: %d success, %d failed, %d skipped", successes, failures, len(results) - successes - failures)
+
+    # Generate consolidated batch HTML report
+    if not args.no_report:
+        from reporting.generate_report import generate_batch_report
+        report_dirs = [str(out / rpt.stem / "extraction") for rpt in reports]
+        html_path = generate_batch_report(
+            report_dirs=report_dirs,
+            batch_results=results,
+            output_dir=str(out),
+        )
+        logger.info("Batch migration report: %s", html_path)
+
     return 1 if failures > 0 else 0
 
 

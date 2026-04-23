@@ -200,3 +200,129 @@ class DataSourceAnalyzer:
                 )
 
         return recs
+
+    def generate_m_queries(
+        self,
+        connections: list[dict[str, Any]],
+        datasets: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Generate a Power Query M expression per data source.
+
+        Args:
+            connections: Data source connection dicts.
+            datasets: Dataset dicts with query text.
+
+        Returns:
+            List of dicts with source name, M query text, and mode.
+        """
+        from fabric_output.m_query_generator import MQueryGenerator
+
+        mq = MQueryGenerator()
+        sources = self._classify_sources(connections)
+        conn_by_name = {c.get("name", ""): c for c in connections}
+
+        results: list[dict[str, Any]] = []
+        for ds in datasets:
+            source_name = ds.get("data_source", "")
+            conn = conn_by_name.get(source_name, {})
+            if not conn:
+                continue
+            query = ds.get("query", "")
+            m_expr = mq.generate_from_connection(conn, query)
+
+            # Determine mode per source
+            src_info = next(
+                (s for s in sources if s.get("name") == source_name), {}
+            )
+            mode = "directlake" if src_info.get("directlake_eligible") else "import"
+
+            results.append({
+                "dataset_name": ds.get("name", ""),
+                "source_name": source_name,
+                "m_query": m_expr,
+                "mode": mode,
+                "category": src_info.get("category", "other"),
+            })
+
+        logger.info(
+            "Generated %d M queries across %d data sources",
+            len(results),
+            len(set(r["source_name"] for r in results)),
+        )
+        return results
+
+    def build_composite_model(
+        self,
+        connections: list[dict[str, Any]],
+        datasets: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Build a composite semantic model config for multi-source reports.
+
+        Returns:
+            Dict with model mode, table configs (import vs directquery),
+            relationship suggestions, and per-source M queries.
+        """
+        analysis = self.analyze(connections, datasets)
+        m_queries = self.generate_m_queries(connections, datasets)
+        sources = self._classify_sources(connections)
+
+        tables: list[dict[str, Any]] = []
+        for mq in m_queries:
+            table_mode = "directQuery" if mq["mode"] == "directlake" else "import"
+            tables.append({
+                "name": mq["dataset_name"],
+                "source": mq["source_name"],
+                "mode": table_mode,
+                "m_query": mq["m_query"],
+            })
+
+        # Suggest cross-source relationships
+        relationships = self._suggest_cross_source_relationships(datasets)
+
+        return {
+            "model_mode": analysis["mode"],
+            "tables": tables,
+            "relationships": relationships,
+            "recommendations": analysis["recommendations"],
+            "total_sources": len(sources),
+        }
+
+    @staticmethod
+    def _suggest_cross_source_relationships(
+        datasets: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Suggest relationships between datasets from different sources.
+
+        Uses column name matching to detect potential join keys.
+        """
+        relationships: list[dict[str, Any]] = []
+        ds_columns: dict[str, set[str]] = {}
+
+        for ds in datasets:
+            name = ds.get("name", "")
+            cols: set[str] = set()
+            for ch in ds.get("column_hints", []):
+                cols.add(ch.get("columnName", ""))
+            for rc in ds.get("result_columns", []):
+                cols.add(rc.get("name", rc.get("columnName", "")))
+            ds_columns[name] = cols
+
+        ds_names = list(ds_columns.keys())
+        for i, ds1 in enumerate(ds_names):
+            for ds2 in ds_names[i + 1:]:
+                shared = ds_columns[ds1] & ds_columns[ds2]
+                # Filter to likely join keys
+                join_cols = {
+                    c for c in shared
+                    if c and any(kw in c.lower() for kw in ("id", "key", "code", "num"))
+                }
+                if join_cols:
+                    best = min(join_cols)  # deterministic pick
+                    relationships.append({
+                        "from_table": ds1,
+                        "to_table": ds2,
+                        "column": best,
+                        "all_shared": sorted(join_cols),
+                    })
+
+        return relationships

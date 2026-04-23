@@ -18,9 +18,11 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12%2B-3776ab?logo=python&logoColor=white" alt="Python 3.12+"/>
   <img src="https://img.shields.io/badge/dependencies-zero-brightgreen" alt="Zero Dependencies"/>
-  <img src="https://img.shields.io/badge/tests-405%20passed-107c10?logo=pytest&logoColor=white" alt="Tests"/>
+  <img src="https://img.shields.io/badge/tests-816%20passed-107c10?logo=pytest&logoColor=white" alt="Tests"/>
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"/>
   <img src="https://img.shields.io/badge/agents-10-8764b8" alt="10 Agents"/>
+  <img src="https://img.shields.io/badge/visual%20types-140%2B-e97627" alt="140+ Visuals"/>
+  <img src="https://img.shields.io/badge/M%20connectors-40%2B-0078d4" alt="40+ Connectors"/>
 </p>
 
 ---
@@ -31,10 +33,12 @@
 
 | Capability | Details |
 |:---|:---|
-| **37 source modules** | Extraction, conversion, governance, deployment, reporting |
-| **405 tests** | Comprehensive coverage across all modules |
+| **51 source modules** | Extraction, conversion, governance, deployment, reporting, telemetry |
+| **816 tests** | Comprehensive coverage across 44 test files |
 | **Zero dependencies** | Pure Python stdlib — no pip install needed for core |
 | **10-agent architecture** | Specialized agents for each migration concern |
+| **140+ visual types** | BIRT visuals → PBI visual mappings (3D, combo, sankey, sparkline, …) |
+| **40+ M query connectors** | JDBC → Power Query M (Oracle, PostgreSQL, Snowflake, BigQuery, …) |
 | **HTML dashboard** | Interactive migration report with fidelity scoring |
 
 ---
@@ -128,16 +132,18 @@ python migrate.py \
 | **Data Factory Pipelines** | REST connector → OneLake copy activities (3-stage orchestration) |
 | **PySpark Notebooks** | ETL for document processing, metadata enrichment, OCR |
 | **Dataflow Gen2** | Power Query M for incremental data ingestion |
-| **TMDL Semantic Model** | Tables, columns, measures, relationships |
+| **TMDL Semantic Model** | Tables, columns, measures, relationships, hierarchies, calc groups, RLS |
 
 ### 🟡 Power BI (from BIRT reports)
 
 | Artifact | Description |
 |:---|:---|
-| **.pbip Project** | PBIR v4.0 report definition |
-| **DAX Measures** | 80+ BIRT JavaScript → DAX conversions |
-| **Power Query M** | Converted from BIRT JDBC data sources |
-| **Visual Mappings** | BIRT chart/table/crosstab → PBI visuals |
+| **.pbip Project** | PBIR v4.0 report definition with bookmarks |
+| **DAX Measures** | 80+ BIRT JavaScript → DAX conversions + DAX optimizer |
+| **Power Query M** | 40+ connectors (Oracle, PostgreSQL, Snowflake, BigQuery, MongoDB, …) |
+| **Visual Mappings** | 140+ BIRT visual → PBI visual type mappings |
+| **TMDL Hierarchies** | Auto-inferred date/geography hierarchies, calculation groups, RLS roles |
+| **DAX Recipes** | Industry-specific KPI templates (Healthcare, Finance, Retail, Manufacturing) |
 
 ### 🟠 Governance & Security
 
@@ -148,6 +154,21 @@ python migrate.py \
 | **Retention Policies** | Mapped to Purview retention |
 | **Audit Trail** | Complete migration evidence chain (JSON + CSV) |
 | **Security Validation** | Path traversal defense, credential scrubbing, ZIP-slip protection |
+
+### 🟣 Enterprise Features
+
+| Artifact | Description |
+|:---|:---|
+| **Multi-Tenant Deployment** | Template-based workspace creation with per-tenant substitutions |
+| **Bundle Deployer** | Shared semantic model + thin report bundles |
+| **Refresh Schedules** | BIRT/iHub/cron schedules → PBI refresh configuration |
+| **Gateway Config** | JDBC connections → PBI gateway bindings (Oracle, PostgreSQL, SQL Server, …) |
+| **Telemetry** | Event tracking, HTML dashboard, Prometheus/Azure Monitor export |
+| **Regression Suite** | Snapshot-based drift detection, visual diff, comparison reports |
+| **Change Detection** | File-hash + mtime incremental sync engine |
+| **Recovery Report** | Self-healing failure tracking with retry recommendations |
+| **SLA Tracker** | Per-report duration and fidelity compliance monitoring |
+| **Plugin System** | Extensible visual mapping and DAX post-processing hooks |
 
 ---
 
@@ -185,7 +206,8 @@ OpenTextToFabric/
 │   ├── api_client.py           #    Base REST client (auth, pagination, retry)
 │   ├── content_server.py       #    Content Server REST v2 → 5 JSON files
 │   ├── documentum_client.py    #    Documentum REST → 5 JSON files
-│   └── birt_parser.py          #    .rptdesign XML → 4 JSON files
+│   ├── birt_parser.py          #    .rptdesign XML → 4 JSON files
+│   └── ihub_client.py          #    iHub/ERES REST API integration
 │
 ├── content_handler/            # ── Document Binary Management ──────────
 │   ├── downloader.py           #    Chunked download with resume
@@ -195,8 +217,13 @@ OpenTextToFabric/
 │
 ├── report_converter/           # ── BIRT → Power BI Conversion ──────────
 │   ├── expression_converter.py #    80+ BIRT JS → DAX mappings
-│   ├── visual_mapper.py        #    BIRT visuals → PBI visual configs
-│   └── pbip_generator.py       #    .pbip PBIR v4.0 project output
+│   ├── visual_mapper.py        #    140+ BIRT visuals → PBI visual configs
+│   ├── pbip_generator.py       #    .pbip PBIR v4.0 project output + bookmarks
+│   ├── conditional_format.py   #    BIRT highlight rules → PBI formatting
+│   ├── drill_through.py        #    Drill-through page generation
+│   ├── multi_datasource.py     #    Multi-source composite model builder
+│   ├── dax_optimizer.py        #    AST-based DAX rewriter (IF→SWITCH, etc.)
+│   └── plugins.py              #    Plugin system for custom visual/DAX hooks
 │
 ├── fabric_output/              # ── Step 2: Fabric Generation ───────────
 │   ├── fabric_constants.py     #    Spark type maps, sanitization
@@ -204,8 +231,9 @@ OpenTextToFabric/
 │   ├── pipeline_generator.py   #    Data Factory pipeline JSON
 │   ├── notebook_generator.py   #    PySpark notebook generation
 │   ├── dataflow_generator.py   #    Dataflow Gen2 (Power Query M)
-│   ├── tmdl_generator.py       #    TMDL semantic model
-│   └── m_query_generator.py    #    Power Query M expressions
+│   ├── tmdl_generator.py       #    TMDL semantic model + hierarchies + calc groups + RLS
+│   ├── m_query_generator.py    #    40+ Power Query M connectors
+│   └── dax_recipes.py          #    Industry-specific KPI measure templates
 │
 ├── governance/                 # ── Permission & Compliance ─────────────
 │   ├── acl_mapper.py           #    CS/DCTM ACL → RLS role mapping
@@ -214,10 +242,13 @@ OpenTextToFabric/
 │   ├── audit.py                #    Migration audit trail (JSON/CSV export)
 │   └── security_validator.py   #    Path traversal, credential scrub, XXE
 │
-├── reporting/                  # ── HTML Migration Dashboard ────────────
+├── reporting/                  # ── HTML Dashboard & Observability ─────
 │   ├── html_template.py        #    Fluent/PBI CSS + JS + 15 components
 │   ├── migration_report.py     #    Per-item fidelity tracking & scoring
-│   └── generate_report.py      #    8-section dashboard builder
+│   ├── generate_report.py      #    8-section dashboard builder
+│   ├── telemetry.py            #    Event tracking, Prometheus/Azure Monitor export
+│   ├── regression.py           #    Snapshot drift detection, visual diff, comparison
+│   └── incremental.py          #    Change detection, recovery report, SLA tracker
 │
 ├── assessment/                 # ── Pre-Migration Analysis ──────────────
 │   ├── scanner.py              #    Content inventory
@@ -230,9 +261,11 @@ OpenTextToFabric/
 │   ├── auth.py                 #    Azure AD (Service Principal + MI)
 │   ├── fabric_client.py        #    Fabric REST API client
 │   ├── deployer.py             #    Workspace provisioning & deploy
-│   └── onelake_client.py       #    ADLS Gen2 / OneLake upload
+│   ├── onelake_client.py       #    ADLS Gen2 / OneLake upload
+│   ├── multi_tenant.py         #    Template-based multi-tenant deployment + bundle
+│   └── refresh_gateway.py      #    BIRT/cron schedule → PBI refresh + gateway mapping
 │
-├── tests/                      # 405 tests across 22 test files
+├── tests/                      # 816 tests across 44 test files
 ├── docs/                       # Architecture, agents, dev plan
 │   ├── assets/                 #    Logo + architecture SVG
 │   ├── ARCHITECTURE.md

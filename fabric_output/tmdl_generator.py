@@ -20,6 +20,9 @@ class TMDLGenerator:
         self.tables: list[dict[str, Any]] = []
         self.relationships: list[dict[str, Any]] = []
         self.measures: list[dict[str, Any]] = []
+        self.hierarchies: list[dict[str, Any]] = []
+        self.roles: list[dict[str, Any]] = []
+        self.calculation_groups: list[dict[str, Any]] = []
         # Data source connections keyed by source name
         self.data_sources: dict[str, dict[str, Any]] = {}
 
@@ -44,9 +47,14 @@ class TMDLGenerator:
         columns: list[dict[str, Any]] = []
 
         # From result columns / column hints
+        seen_names: set[str] = set()
         for col in dataset.get("result_columns", []):
+            col_safe = sanitize_name(col.get("name", col.get("columnName", "")))
+            if col_safe in seen_names:
+                continue
+            seen_names.add(col_safe)
             columns.append({
-                "name": sanitize_name(col.get("name", col.get("columnName", ""))),
+                "name": col_safe,
                 "dataType": BIRT_TO_TMDL_TYPE.get(
                     col.get("dataType", "string").lower(), "string"
                 ),
@@ -56,7 +64,9 @@ class TMDLGenerator:
 
         for hint in dataset.get("column_hints", []):
             col_name = hint.get("columnName", hint.get("name", ""))
-            if col_name and not any(c["name"] == sanitize_name(col_name) for c in columns):
+            col_safe = sanitize_name(col_name) if col_name else ""
+            if col_safe and col_safe not in seen_names:
+                seen_names.add(col_safe)
                 columns.append({
                     "name": sanitize_name(col_name),
                     "dataType": BIRT_TO_TMDL_TYPE.get(
@@ -70,7 +80,9 @@ class TMDLGenerator:
         # Computed columns → calculated columns
         for cc in dataset.get("computed_columns", []):
             col_name = cc.get("name", "")
-            if col_name:
+            col_safe = sanitize_name(col_name) if col_name else ""
+            if col_safe and col_safe not in seen_names:
+                seen_names.add(col_safe)
                 columns.append({
                     "name": sanitize_name(col_name),
                     "dataType": BIRT_TO_TMDL_TYPE.get(
@@ -127,6 +139,130 @@ class TMDLGenerator:
         self.measures.append(measure)
         return measure
 
+    def add_hierarchy(
+        self,
+        table_name: str,
+        hierarchy_name: str,
+        levels: list[str],
+        display_folder: str = "",
+    ) -> dict[str, Any]:
+        """Add a hierarchy to a table.
+
+        Args:
+            table_name: Table containing the hierarchy columns.
+            hierarchy_name: Display name for the hierarchy.
+            levels: Ordered list of column names (top → bottom).
+            display_folder: Optional display folder for organization.
+        """
+        h = {
+            "table": sanitize_name(table_name),
+            "name": sanitize_name(hierarchy_name),
+            "levels": [sanitize_name(l) for l in levels],
+            "displayFolder": display_folder,
+        }
+        self.hierarchies.append(h)
+        return h
+
+    def add_role(
+        self,
+        role_name: str,
+        table_filters: dict[str, str],
+        description: str = "",
+    ) -> dict[str, Any]:
+        """Add an RLS (Row-Level Security) role.
+
+        Args:
+            role_name: Name of the security role.
+            table_filters: Dict of {table_name: dax_filter_expression}.
+            description: Optional role description.
+        """
+        role = {
+            "name": sanitize_name(role_name),
+            "description": description,
+            "tablePermissions": [
+                {"table": sanitize_name(t), "filterExpression": expr}
+                for t, expr in table_filters.items()
+            ],
+        }
+        self.roles.append(role)
+        return role
+
+    def add_calculation_group(
+        self,
+        name: str,
+        items: list[dict[str, str]],
+        precedence: int = 0,
+    ) -> dict[str, Any]:
+        """Add a calculation group.
+
+        Args:
+            name: Calculation group table name.
+            items: List of dicts with 'name' and 'expression' keys.
+            precedence: Evaluation order precedence.
+        """
+        cg = {
+            "name": sanitize_name(name),
+            "items": [
+                {"name": sanitize_name(i["name"]), "expression": i["expression"]}
+                for i in items
+            ],
+            "precedence": precedence,
+        }
+        self.calculation_groups.append(cg)
+        return cg
+
+    def infer_hierarchies(self) -> list[dict[str, Any]]:
+        """Auto-detect hierarchies from common column name patterns.
+
+        Detects patterns like Year→Quarter→Month→Day, Country→State→City,
+        Category→SubCategory.
+        """
+        hierarchy_patterns = [
+            ("Date Hierarchy", ["Year", "Quarter", "Month", "Day"]),
+            ("Date Hierarchy", ["ANNEE", "MOIS", "JOUR"]),
+            ("Date Hierarchy", ["Year", "Month", "Day"]),
+            ("Geography", ["Country", "State", "City"]),
+            ("Geography", ["Region", "Department", "City"]),
+            ("Geography", ["PAYS", "REGION", "VILLE"]),
+            ("Category", ["Category", "SubCategory"]),
+            ("Category", ["CATEGORIE", "SOUS_CATEGORIE"]),
+            ("Organization", ["Division", "Department", "Team"]),
+        ]
+
+        for table in self.tables:
+            col_names = {c["name"] for c in table.get("columns", [])}
+            col_names_lower = {c.lower() for c in col_names}
+
+            for hier_name, pattern in hierarchy_patterns:
+                matched = [p for p in pattern if p.lower() in col_names_lower]
+                if len(matched) >= 2:
+                    # Get actual column names (preserve case)
+                    actual = []
+                    for p in pattern:
+                        for c in col_names:
+                            if c.lower() == p.lower():
+                                actual.append(c)
+                                break
+                    if len(actual) >= 2:
+                        self.add_hierarchy(table["name"], hier_name, actual)
+
+        logger.info("Inferred %d hierarchies", len(self.hierarchies))
+        return self.hierarchies
+
+    def add_rls_from_acl(self, acl_roles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Generate RLS roles from ACL mappings.
+
+        Args:
+            acl_roles: List of role dicts with 'name' and 'filters' (table→expression).
+        """
+        for acl_role in acl_roles:
+            self.add_role(
+                role_name=acl_role.get("name", "Role"),
+                table_filters=acl_role.get("filters", {}),
+                description=acl_role.get("description", "Auto-generated from ACL"),
+            )
+        return self.roles
+
     def infer_relationships(
         self,
         datasets: list[dict[str, Any]],
@@ -135,9 +271,14 @@ class TMDLGenerator:
 
         SQL JOIN clauses reference base tables (e.g. orders/regions) that are not
         modeled as PBI tables — only the dataset result-sets become tables. The
-        only reliable signal across them is shared column names. We pick a
-        candidate FK when a column exists in two different tables and at least
-        one of them looks like a dimension (smaller cardinality / lookup).
+        only reliable signal across them is shared column names.
+
+        Power BI only allows **one active relationship** per table pair. When
+        multiple columns match between two tables, we pick the best candidate
+        using a priority heuristic:
+          1. Columns whose name ends with ``_id`` or ``id`` (likely a key).
+          2. Columns whose name ends with ``_code`` or ``code``.
+          3. The first shared column alphabetically (deterministic fallback).
         """
         # Build column -> [tables] index from the registered tables
         col_to_tables: dict[str, list[str]] = {}
@@ -147,11 +288,11 @@ class TMDLGenerator:
                     continue
                 col_to_tables.setdefault(col["name"], []).append(tbl["name"])
 
-        seen: set[tuple[str, str, str]] = set()
+        # Group shared columns by (fact, dim) table pair
+        pair_candidates: dict[tuple[str, str], list[str]] = {}
         for col_name, tables in col_to_tables.items():
             if len(tables) < 2:
                 continue
-            # Treat the *smaller* table (fewer columns) as the dimension side
             ranked = sorted(
                 tables,
                 key=lambda n: len(next(
@@ -160,22 +301,90 @@ class TMDLGenerator:
             )
             dim_table = ranked[0]
             for fact_table in ranked[1:]:
-                key = (fact_table, dim_table, col_name)
-                if key in seen:
-                    continue
-                seen.add(key)
-                self.relationships.append({
-                    "name": f"rel_{fact_table}_{dim_table}_{col_name}",
-                    "fromTable": fact_table,
-                    "fromColumn": col_name,
-                    "toTable": dim_table,
-                    "toColumn": col_name,
-                    "crossFilteringBehavior": "oneDirection",
-                    "cardinality": "manyToOne",
-                })
+                pair_key = (fact_table, dim_table)
+                pair_candidates.setdefault(pair_key, []).append(col_name)
+
+        # Pick one column per pair — prefer _id / id, then _code / code
+        def _col_priority(name: str) -> tuple[int, str]:
+            lower = name.lower()
+            if lower.endswith("_id") or lower == "id":
+                return (0, lower)
+            if lower.endswith("_code") or lower == "code":
+                return (1, lower)
+            return (2, lower)
+
+        for (fact_table, dim_table), candidates in pair_candidates.items():
+            best = sorted(candidates, key=_col_priority)[0]
+            self.relationships.append({
+                "name": f"rel_{fact_table}_{dim_table}_{best}",
+                "fromTable": fact_table,
+                "fromColumn": best,
+                "toTable": dim_table,
+                "toColumn": best,
+                "crossFilteringBehavior": "oneDirection",
+                "cardinality": "manyToOne",
+                "isActive": True,
+            })
+
+        # Deactivate relationships that create ambiguous paths.
+        # Power BI forbids two active paths between any pair of tables.
+        self._deactivate_ambiguous_paths()
 
         logger.info("Inferred %d relationships from shared columns", len(self.relationships))
         return self.relationships
+
+    def _deactivate_ambiguous_paths(self) -> None:
+        """Detect and deactivate relationships that create ambiguous paths.
+
+        An ambiguous path exists when table A can reach table B via two
+        different active paths (e.g. A→B directly AND A→C→B). When
+        detected, the *direct* shortcut edge is deactivated because the
+        transitive path usually carries more semantic meaning (dimension
+        chain).
+        """
+        # Build adjacency list from active relationships (undirected for
+        # reachability — PBI considers paths regardless of direction).
+        from collections import deque
+
+        active = [r for r in self.relationships if r.get("isActive", True)]
+
+        def _can_reach(src: str, dst: str, excluded_rel_name: str) -> bool:
+            """BFS reachability check excluding one relationship."""
+            adj: dict[str, list[str]] = {}
+            for r in active:
+                if r["name"] == excluded_rel_name:
+                    continue
+                if not r.get("isActive", True):
+                    continue
+                adj.setdefault(r["fromTable"], []).append(r["toTable"])
+                adj.setdefault(r["toTable"], []).append(r["fromTable"])
+            visited: set[str] = set()
+            queue: deque[str] = deque([src])
+            visited.add(src)
+            while queue:
+                node = queue.popleft()
+                if node == dst:
+                    return True
+                for neighbor in adj.get(node, []):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append(neighbor)
+            return False
+
+        deactivated = 0
+        for rel in self.relationships:
+            if not rel.get("isActive", True):
+                continue
+            # If removing this edge still leaves a path, it's redundant
+            if _can_reach(rel["fromTable"], rel["toTable"], rel["name"]):
+                rel["isActive"] = False
+                deactivated += 1
+                logger.info(
+                    "Deactivated ambiguous relationship %s (%s → %s)",
+                    rel["name"], rel["fromTable"], rel["toTable"],
+                )
+        if deactivated:
+            logger.info("Deactivated %d ambiguous relationships", deactivated)
 
     def generate_tmdl(self) -> dict[str, str]:
         """Generate TMDL content for each table.
@@ -203,7 +412,33 @@ class TMDLGenerator:
                     f"\ttoColumn: {rel['toTable']}.{rel['toColumn']}\n"
                     f"\tcrossFilteringBehavior: {rel['crossFilteringBehavior']}\n"
                 )
+                if not rel.get("isActive", True):
+                    rel_tmdl += "\tisActive: false\n"
             files["relationships.tmdl"] = rel_tmdl
+
+        # Roles (RLS)
+        if self.roles:
+            roles_tmdl = ""
+            for role in self.roles:
+                roles_tmdl += f"\nrole {self._quote_name(role['name'])}\n"
+                if role.get("description"):
+                    roles_tmdl += f"\tdescription: {role['description']}\n"
+                roles_tmdl += "\tmodelPermission: read\n"
+                for tp in role.get("tablePermissions", []):
+                    roles_tmdl += f"\n\ttablePermission {self._quote_name(tp['table'])}\n"
+                    roles_tmdl += f"\t\tfilterExpression = {tp['filterExpression']}\n"
+            files["roles.tmdl"] = roles_tmdl
+
+        # Calculation groups
+        for cg in self.calculation_groups:
+            cg_tmdl = f"table {self._quote_name(cg['name'])}\n"
+            cg_tmdl += "\tlineageTag: calculationGroup\n"
+            cg_tmdl += f"\n\tcalculationGroup\n"
+            cg_tmdl += f"\t\tprecedence: {cg.get('precedence', 0)}\n"
+            for item in cg.get("items", []):
+                cg_tmdl += f"\n\t\tcalculationItem {self._quote_name(item['name'])}\n"
+                cg_tmdl += f"\t\t\texpression = {item['expression']}\n"
+            files[f"tables/{cg['name']}.tmdl"] = cg_tmdl
 
         return files
 
@@ -357,6 +592,23 @@ class TMDLGenerator:
                 lines.append(f"\t\tdisplayFolder: {m['displayFolder']}")
             lines.append(f"\t\tlineageTag: {m['name']}")
             lines.append("")
+
+        # Hierarchies for this table
+        table_hierarchies = [h for h in self.hierarchies if h["table"] == table["name"]]
+        for h in table_hierarchies:
+            hname = self._quote_name(h['name'])
+            lines.append(f"\thierarchy {hname}")
+            if h.get("displayFolder"):
+                lines.append(f"\t\tdisplayFolder: {h['displayFolder']}")
+            lines.append(f"\t\tlineageTag: {h['name']}")
+            lines.append("")
+            for i, level in enumerate(h["levels"]):
+                lname = self._quote_name(level)
+                lines.append(f"\t\tlevel {lname}")
+                lines.append(f"\t\t\tordinal: {i}")
+                lines.append(f"\t\t\tcolumn: {lname}")
+                lines.append(f"\t\t\tlineageTag: {h['name']}_{level}")
+                lines.append("")
 
         # Partition (M query source).
         # We emit a SINGLE-LINE M expression to avoid TMDL multi-line parsing

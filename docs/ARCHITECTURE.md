@@ -28,9 +28,12 @@ A third step (Content Transfer) handles binary document migration unique to ECM.
               │     │   (cabinets, objects,        │
               │     │    lifecycles, ACLs)         │
               │     +── birt_parser.py             │
-              │         (.rptdesign XML parsing,   │
-              │          datasets, expressions,    │
-              │          visuals, parameters)      │
+              │     │   (.rptdesign XML parsing,   │
+              │     │    datasets, expressions,    │
+              │     │    visuals, parameters)      │
+              │     +── ihub_client.py             │
+              │         (iHub/ERES REST API,       │
+              │          volumes, reports, output)  │
               └───────────────┬───────────────────┘
                               │
                               ▼
@@ -160,17 +163,23 @@ Documentum REST Services
 | `pipeline_generator.py` | connections, nodes | Data Factory pipeline JSON (REST → OneLake copy) |
 | `notebook_generator.py` | documents, metadata | PySpark ETL notebooks (document processing) |
 | `dataflow_generator.py` | connections, datasets | Dataflow Gen2 M queries (incremental ingestion) |
-| `tmdl_generator.py` | datasets, expressions | TMDL semantic model (tables, measures, relationships) |
-| `m_query_generator.py` | connections | Power Query M for data source connections |
+| `tmdl_generator.py` | datasets, expressions | TMDL semantic model (tables, measures, relationships, hierarchies, calc groups, RLS) |
+| `m_query_generator.py` | connections | Power Query M for 40+ data source connectors |
+| `dax_recipes.py` | datasets, industry config | Industry-specific KPI measure templates (Healthcare, Finance, Retail, Manufacturing) |
 
 #### Report Conversion (`report_converter/`)
 
 | Module | Input | Output |
 |--------|-------|--------|
 | `birt_parser.py` | .rptdesign XML | Parsed report structure (intermediate dicts) |
-| `expression_converter.py` | BIRT JS expressions | DAX formulas |
-| `visual_mapper.py` | BIRT visuals JSON | PBI visual configs (PBIR v4.0) |
-| `pbip_generator.py` | All report JSON | .pbip project (report + semantic model) |
+| `expression_converter.py` | BIRT JS expressions | DAX formulas (80+ conversions) |
+| `visual_mapper.py` | BIRT visuals JSON | PBI visual configs (140+ PBIR v4.0 mappings) |
+| `pbip_generator.py` | All report JSON | .pbip project (report + semantic model + bookmarks) |
+| `conditional_format.py` | BIRT highlight rules | PBI conditional formatting rules |
+| `drill_through.py` | BIRT sub-reports/links | Drill-through pages with filter propagation |
+| `multi_datasource.py` | Multiple connections | Composite model with cross-source relationships |
+| `dax_optimizer.py` | DAX formulas | Optimized DAX (IF→SWITCH, ISBLANK→COALESCE, time intelligence) |
+| `plugins.py` | Plugin registry | Extensible visual mapping and DAX post-processing hooks |
 
 #### Governance (`governance/`)
 
@@ -181,6 +190,28 @@ Documentum REST Services
 | `purview_mapper.py` | retention.json | Purview retention policies |
 | `audit.py` | All JSON | Migration audit trail (evidence chain) |
 | `security_validator.py` | All inputs | Path traversal defense, credential scrubbing |
+
+#### Deployment (`deploy/`)
+
+| Module | Input | Output |
+|--------|-------|--------|
+| `auth.py` | Azure config | OAuth2 tokens (Service Principal + Managed Identity) |
+| `fabric_client.py` | API config | Fabric REST API session (workspace, items CRUD) |
+| `deployer.py` | Generated artifacts | Workspace provisioning + artifact upload |
+| `onelake_client.py` | Binary content | ADLS Gen2 / OneLake file storage |
+| `multi_tenant.py` | Tenant configs | Template-based multi-tenant workspaces + bundle deployment |
+| `refresh_gateway.py` | BIRT schedules, JDBC connections | PBI refresh configuration + gateway bindings |
+
+#### Reporting & Observability (`reporting/`)
+
+| Module | Input | Output |
+|--------|-------|--------|
+| `html_template.py` | Template config | Fluent/PBI CSS + JS + 15 reusable components |
+| `migration_report.py` | Migration results | Per-item fidelity tracking & scoring |
+| `generate_report.py` | All JSON outputs | 8-section interactive HTML dashboard |
+| `telemetry.py` | Migration events | Event tracking + Prometheus/Azure Monitor export |
+| `regression.py` | Migration snapshots | Snapshot drift detection, visual diff, comparison reports |
+| `incremental.py` | File system state | Change detection, recovery report, SLA tracking |
 
 ## Key Design Principles
 
@@ -217,5 +248,7 @@ ECM migrations require deep permission mapping. Governance is not optional:
 | Secondary output | Fabric artifacts | .pbip (for BIRT reports only) |
 | Binary content | None (no document migration) | Full document binary migration |
 | Permissions | Basic RLS from Tableau user filters | Deep ACL → RLS + Purview mapping |
-| Formula language | Tableau calc → DAX (180+ mappings) | BIRT JavaScript → DAX (80+ mappings) |
+| Formula language | Tableau calc → DAX (180+ mappings) | BIRT JavaScript → DAX (80+ mappings) + DAX optimizer |
+| Visual types | 118+ visual type mappings | 140+ visual type mappings |
+| Connectors | 33 connector types | 40+ M query connectors |
 | Agents | 12 (DAX/Wiring/Semantic/Visual specialists) | 10 (@content + @governance are new) |

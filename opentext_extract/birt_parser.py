@@ -57,6 +57,8 @@ class BIRTParser:
             "parameters": self._extract_parameters(),
             "body": self._extract_body(),
             "styles": self._extract_styles(),
+            "highlights": self._extract_highlights(),
+            "hyperlinks": self._extract_hyperlinks(),
             "page_setup": self._extract_page_setup(),
         }
 
@@ -346,6 +348,84 @@ class BIRTParser:
                 config["raw_xml"] = (xp.text or "")[:2000]
         return config
 
+    # ── Highlights ────────────────────────────────────────────
+
+    def _extract_highlights(self) -> list[dict[str, Any]]:
+        """Extract highlight (conditional formatting) rules from body elements."""
+        highlights: list[dict[str, Any]] = []
+        assert self._root is not None
+
+        for hl in self._root.findall(".//list-property[@name='highlightRules']/structure"):
+            rule: dict[str, Any] = {"type": "highlight", "style": {}}
+            for prop in hl.findall("property"):
+                name = prop.get("name", "")
+                val = prop.text or ""
+                if name == "operator":
+                    rule["operator"] = val
+                elif name == "value1":
+                    rule["value1"] = val
+                elif name == "value2":
+                    rule["value2"] = val
+                elif name == "testExpr":
+                    rule["test_expression"] = val
+                elif name in ("color", "backgroundColor", "fontWeight",
+                              "fontStyle", "textDecoration", "fontSize",
+                              "borderColor", "background-color", "font-weight"):
+                    rule["style"][name] = val
+            for expr in hl.findall("expression"):
+                if expr.get("name") == "testExpr":
+                    rule["test_expression"] = expr.text or ""
+            highlights.append(rule)
+
+        return highlights
+
+    # ── Hyperlinks ──────────────────────────────────────────────
+
+    def _extract_hyperlinks(self) -> list[dict[str, Any]]:
+        """Extract hyperlink actions and sub-report references from body elements."""
+        hyperlinks: list[dict[str, Any]] = []
+        assert self._root is not None
+
+        for action in self._root.findall(".//list-property[@name='action']/structure"):
+            link: dict[str, Any] = {
+                "action": "drillthrough",
+                "target_report": "",
+                "parameters": {},
+                "source_column": "",
+            }
+            for prop in action.findall("property"):
+                name = prop.get("name", "")
+                val = prop.text or ""
+                if name == "linkType":
+                    if val == "hyperlink":
+                        link["action"] = "url"
+                    elif val == "bookmark":
+                        link["action"] = "bookmark"
+                    else:
+                        link["action"] = "drillthrough"
+                elif name == "targetWindow":
+                    link["target_window"] = val
+                elif name == "uri":
+                    link["target_report"] = val
+                elif name == "reportName":
+                    link["target_report"] = val
+                elif name == "targetBookmark":
+                    link["target_report"] = val
+            # Extract drill-through parameter mappings
+            for param_list in action.findall("list-property[@name='paramBindings']/structure"):
+                p_name = ""
+                p_expr = ""
+                for prop in param_list.findall("property"):
+                    if prop.get("name") == "paramName":
+                        p_name = prop.text or ""
+                for expr in param_list.findall("expression"):
+                    p_expr = expr.text or ""
+                if p_name:
+                    link["parameters"][p_name] = p_expr
+            hyperlinks.append(link)
+
+        return hyperlinks
+
     # ── Styles ──────────────────────────────────────────────────
 
     def _extract_styles(self) -> list[dict[str, Any]]:
@@ -420,6 +500,8 @@ class BIRTParser:
             self._collect_all_expressions(data),
         )
         files["visuals.json"] = _write_json(out / "visuals.json", data["body"])
+        files["highlights.json"] = _write_json(out / "highlights.json", data.get("highlights", []))
+        files["hyperlinks.json"] = _write_json(out / "hyperlinks.json", data.get("hyperlinks", []))
 
         return files
 

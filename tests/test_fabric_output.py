@@ -216,6 +216,79 @@ class TestTMDLGenerator(unittest.TestCase):
         self.assertEqual(rels[0]["fromColumn"], "region")
         self.assertEqual(rels[0]["toColumn"], "region")
 
+    def test_infer_relationships_deactivates_ambiguous_paths(self):
+        """A→B, B→C, A→C should deactivate A→C (redundant shortcut)."""
+        tmdl = TMDLGenerator()
+        # Table A (largest — fact table)
+        tmdl.add_table_from_dataset({
+            "name": "EMISSION_CH4", "data_source": "", "query": "",
+            "column_hints": [
+                {"columnName": "conso_elec_id", "dataType": "integer"},
+                {"columnName": "conso_eau_id", "dataType": "integer"},
+                {"columnName": "amount", "dataType": "decimal"},
+            ],
+            "computed_columns": [], "result_columns": [],
+        })
+        # Table B (medium — bridge)
+        tmdl.add_table_from_dataset({
+            "name": "CONSO_EAU", "data_source": "", "query": "",
+            "column_hints": [
+                {"columnName": "conso_eau_id", "dataType": "integer"},
+                {"columnName": "conso_elec_id", "dataType": "integer"},
+            ],
+            "computed_columns": [], "result_columns": [],
+        })
+        # Table C (smallest — dimension)
+        tmdl.add_table_from_dataset({
+            "name": "CONSO_ELEC", "data_source": "", "query": "",
+            "column_hints": [
+                {"columnName": "conso_elec_id", "dataType": "integer"},
+            ],
+            "computed_columns": [], "result_columns": [],
+        })
+        rels = tmdl.infer_relationships([])
+        active_rels = [r for r in rels if r.get("isActive", True)]
+        inactive_rels = [r for r in rels if not r.get("isActive", True)]
+        # Should have at least one deactivated relationship
+        self.assertGreater(len(inactive_rels), 0)
+        # No two active relationships should create an ambiguous path
+        # (i.e., no table reachable by two different active paths)
+        active_pairs = {(r["fromTable"], r["toTable"]) for r in active_rels}
+        # With 3 tables and 3 potential edges, at most 2 can be active
+        self.assertLessEqual(len(active_rels), 2)
+
+    def test_inactive_relationship_in_tmdl_output(self):
+        """isActive: false must appear in generated TMDL for deactivated rels."""
+        tmdl = TMDLGenerator()
+        tmdl.add_table_from_dataset({
+            "name": "A", "data_source": "", "query": "",
+            "column_hints": [
+                {"columnName": "b_id", "dataType": "integer"},
+                {"columnName": "c_id", "dataType": "integer"},
+                {"columnName": "val", "dataType": "decimal"},
+            ],
+            "computed_columns": [], "result_columns": [],
+        })
+        tmdl.add_table_from_dataset({
+            "name": "B", "data_source": "", "query": "",
+            "column_hints": [
+                {"columnName": "b_id", "dataType": "integer"},
+                {"columnName": "c_id", "dataType": "integer"},
+            ],
+            "computed_columns": [], "result_columns": [],
+        })
+        tmdl.add_table_from_dataset({
+            "name": "C", "data_source": "", "query": "",
+            "column_hints": [
+                {"columnName": "c_id", "dataType": "integer"},
+            ],
+            "computed_columns": [], "result_columns": [],
+        })
+        tmdl.infer_relationships([])
+        files = tmdl.generate_tmdl()
+        rel_content = files.get("relationships.tmdl", "")
+        self.assertIn("isActive: false", rel_content)
+
     def test_export(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmdl = TMDLGenerator()

@@ -56,6 +56,45 @@ class PBIPGenerator:
         self.report_name = report_name
         self._report_id = str(uuid.uuid4())
         self._model_id = str(uuid.uuid4())
+        self._bookmarks: list[dict[str, Any]] = []
+
+    def add_bookmark(
+        self,
+        name: str,
+        display_name: str = "",
+        page_id: str = "",
+        visual_states: dict[str, bool] | None = None,
+    ) -> dict[str, Any]:
+        """Add a bookmark to the report.
+
+        Args:
+            name: Bookmark name.
+            display_name: Display name (defaults to name).
+            page_id: Target page ID.
+            visual_states: Dict of {visual_name: is_visible}.
+        """
+        bookmark = {
+            "name": name,
+            "displayName": display_name or name,
+            "reportId": self._report_id,
+            "explorationState": {
+                "version": "1",
+                "activeSection": page_id or "",
+                "filters": {"byExpr": [], "byColumn": []},
+            },
+        }
+        if visual_states:
+            containers = {}
+            for vname, visible in visual_states.items():
+                containers[vname] = {
+                    "singleVisual": {"visualType": ""},
+                    "visibility": 0 if visible else 1,
+                }
+            bookmark["explorationState"]["sections"] = {
+                page_id or "page": {"visualContainers": containers}
+            }
+        self._bookmarks.append(bookmark)
+        return bookmark
 
     def generate(
         self,
@@ -161,6 +200,15 @@ class PBIPGenerator:
         files["pages.json"] = self._write_pages_metadata(
             defn_dir, page_names,
         )
+
+        # 11. bookmarks.json (if any bookmarks registered)
+        if self._bookmarks:
+            bookmarks_path = defn_dir / "bookmarks.json"
+            self._write_json(bookmarks_path, {
+                "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/bookmarks/1.0.0/schema.json",
+                "bookmarks": self._bookmarks,
+            })
+            files["bookmarks.json"] = bookmarks_path
 
         logger.info(
             "Generated .pbip project: %d pages, %d visuals at %s",
