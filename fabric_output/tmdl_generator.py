@@ -223,9 +223,12 @@ class TMDLGenerator:
             url = conn.get("odaURL") or ""
             m_expr = self._build_source_m(driver, url, src_name)
             quoted = self._quote_name(src_name)
-            lines.append(f"expression {quoted} = {m_expr}")
+            # Multi-line M body must be fenced with triple backticks in TMDL
+            lines.append(f"expression {quoted} = ```")
+            for ln in m_expr.split("\n"):
+                lines.append(f"\t\t{ln}")
+            lines.append("\t\t```")
             lines.append(f"\tlineageTag: {src_name}")
-            lines.append("\tkind: m")
             lines.append("")
         return "\n".join(lines)
 
@@ -330,12 +333,12 @@ class TMDLGenerator:
             lines.append(f"\t\tlineageTag: {m['name']}")
             lines.append("")
 
-        # Partition (M query source)
+        # Partition (M query source) — multi-line M MUST be triple-backtick fenced
         ds_name = table.get("data_source", "Source") or "Source"
         part_name = self._quote_name(table['name'])
         lines.append(f"\tpartition {part_name} = m")
         lines.append("\t\tmode: import")
-        lines.append("\t\tsource =")
+        lines.append("\t\tsource = ```")
         lines.append("\t\t\t\tlet")
         lines.append(f'\t\t\t\t\tSource = #"{ds_name}"')
         if table.get("source_query"):
@@ -347,6 +350,7 @@ class TMDLGenerator:
         else:
             lines.append("\t\t\t\tin")
             lines.append("\t\t\t\t\tSource")
+        lines.append("\t\t\t\t```")
         lines.append("")
 
         return "\n".join(lines)
