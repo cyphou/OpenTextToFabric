@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "opentext-to-fabric"
+version = "0.1.0"
+description = "Automated migration of OpenText ECM and BIRT reports to Microsoft Fabric and Power BI"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.4",
+]
+ocr = [
+    "azure-ai-documentintelligence>=1.0",
+]
+deploy = [
+    "azure-identity>=1.15",
+]
+
+[project.scripts]
+migrate = "migrate:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "S", "B"]
+ignore = ["S101"]  # allow assert in tests
+
+[tool.coverage.run]
+source = [
+    "opentext_extract",
+    "content_handler",
+    "report_converter",
+    "fabric_output",
+    "governance",
+    "assessment",
+    "deploy",
+    "migrate",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
