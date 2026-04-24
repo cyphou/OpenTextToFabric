@@ -33,6 +33,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from fabric_output.fabric_constants import sanitize_name
+
 logger = logging.getLogger(__name__)
 
 # Microsoft JSON schemas (pinned versions)
@@ -553,16 +555,22 @@ class PBIPGenerator:
 
     @staticmethod
     def _make_projection(entity: str, prop: str) -> dict[str, Any]:
-        """Create a single RoleProjection entry."""
+        """Create a single RoleProjection entry.
+
+        Both *entity* (table) and *prop* (column) are sanitized to match
+        the TMDL identifiers produced by ``TMDLGenerator``.
+        """
+        safe_entity = sanitize_name(entity) if entity else ""
+        safe_prop = sanitize_name(prop) if prop else ""
         return {
             "field": {
                 "Column": {
-                    "Expression": {"SourceRef": {"Entity": entity}},
-                    "Property": prop,
+                    "Expression": {"SourceRef": {"Entity": safe_entity}},
+                    "Property": safe_prop,
                 },
             },
-            "queryRef": f"{entity}.{prop}" if entity else prop,
-            "nativeQueryRef": prop,
+            "queryRef": f"{safe_entity}.{safe_prop}" if safe_entity else safe_prop,
+            "nativeQueryRef": safe_prop,
         }
 
     # ── Helpers ───────────────────────────────────────────────────

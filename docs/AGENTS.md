@@ -13,9 +13,9 @@ This project uses a **10-agent specialization model** adapted from the [TableauT
 | **@semantic** | TMDL semantic model, relationships, hierarchies | `fabric_output/tmdl_generator.py`, `fabric_output/m_query_generator.py`, `fabric_output/dax_recipes.py` |
 | **@pipeline** | Fabric pipelines, Dataflows, PySpark Notebooks, Lakehouse DDL | `fabric_output/lakehouse_generator.py`, `fabric_output/pipeline_generator.py`, `fabric_output/notebook_generator.py`, `fabric_output/dataflow_generator.py` |
 | **@governance** | Permissions (ACL→RLS), classifications, Purview, audit trail | `governance/*.py` (acl_mapper, classification_mapper, purview_mapper, audit, security_validator) |
-| **@assessor** | Readiness scoring, gap analysis, strategy, validation | `assessment/*.py` (scanner, complexity, readiness_report, validator, strategy_advisor) |
+| **@assessor** | Readiness scoring, gap analysis, strategy, validation, self-healing | `assessment/*.py` (scanner, complexity, readiness_report, validator, strategy_advisor, artifact_healer) |
 | **@deployer** | Fabric deployment, workspace provisioning, OneLake upload | `deploy/*.py` (auth, fabric_client, deployer, onelake_client, multi_tenant, refresh_gateway) |
-| **@tester** | Tests, coverage, fixtures, regression | `tests/*.py` (44 test files, 816 tests) |
+| **@tester** | Tests, coverage, fixtures, regression | `tests/*.py` (45 test files, 878 tests) |
 
 ## Architecture Diagram
 
@@ -128,6 +128,7 @@ This project uses a **10-agent specialization model** adapted from the [TableauT
   - BIRT JavaScript expressions → DAX formulas (80+ conversions)
   - BIRT data source (JDBC) → Power Query M
   - BIRT tables/charts/crosstabs → PBI table/matrix/chart visuals (140+ mappings)
+  - BIRT column aliases → resolved to actual dataset columns (`dataSetRow["X"]` → real column name)
   - BIRT parameters → PBI slicers/filters
   - BIRT styles → PBI theme JSON
   - BIRT highlight rules → PBI conditional formatting
@@ -140,6 +141,7 @@ This project uses a **10-agent specialization model** adapted from the [TableauT
 - **Owns:** `fabric_output/tmdl_generator.py`, `fabric_output/m_query_generator.py`, `fabric_output/dax_recipes.py`
 - **Responsibility:** Generate TMDL semantic model from BIRT datasets or migrated Lakehouse tables
 - **Output:** TMDL files (tables, columns, measures, relationships, hierarchies, calculation groups, RLS roles, industry-specific DAX recipe templates)
+- **BIRT computed columns:** Converted to Power Query M `Table.AddColumn` (not DAX calculated columns) with expression conversion via `_birt_js_to_m()`
 
 ### @pipeline — Fabric Artifact Generator
 - **Owns:** `fabric_output/lakehouse_generator.py`, `fabric_output/pipeline_generator.py`, `fabric_output/notebook_generator.py`, `fabric_output/dataflow_generator.py`, `fabric_output/fabric_constants.py`
@@ -161,13 +163,14 @@ This project uses a **10-agent specialization model** adapted from the [TableauT
   - Migration audit trail with evidence chain
 
 ### @assessor — Migration Analysis
-- **Owns:** `assessment/scanner.py`, `assessment/complexity.py`, `assessment/readiness_report.py`, `assessment/validator.py`, `assessment/strategy_advisor.py`
-- **Responsibility:** Pre-migration analysis, readiness scoring, gap identification
+- **Owns:** `assessment/scanner.py`, `assessment/complexity.py`, `assessment/readiness_report.py`, `assessment/validator.py`, `assessment/strategy_advisor.py`, `assessment/artifact_healer.py`
+- **Responsibility:** Pre-migration analysis, readiness scoring, gap identification, post-generation self-healing
 - **Output:**
   - Content inventory (volume, types, sizes)
   - Complexity scoring (per-report, per-content-area)
   - Readiness report (HTML dashboard with pass/warn/fail)
   - Wave planning (automatic migration wave assignment)
+  - **Artifact healer** (23 self-healing methods): DAX syntax (6), TMDL structure (7), M queries (4), PBIR visuals (6 incl. visual field validation)
   - Post-migration validation (completeness, accuracy)
 
 ### @deployer — Fabric Deployment

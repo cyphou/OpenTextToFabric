@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -379,12 +380,31 @@ class VisualMapper:
         return "textbox"
 
     def _map_table_columns(self, element: dict[str, Any]) -> list[dict[str, Any]]:
-        """Map BIRT table column bindings to PBI column references."""
+        """Map BIRT table column bindings to PBI column references.
+
+        Resolves BIRT aliases: when a column name differs from the dataset
+        column it references (e.g. ``groupe_sur_puits`` → ``dataSetRow["Puits"]``),
+        the underlying dataset column name is used instead.
+        """
         columns: list[dict[str, Any]] = []
+        seen: set[str] = set()
         for col in element.get("columns", []):
+            name = col.get("name", "")
+            expr = col.get("expression", "")
+            # Resolve aliases: dataSetRow["RealCol"] → use RealCol
+            m = re.match(r'dataSetRow\["([^"]+)"\]', expr)
+            if m:
+                real_col = m.group(1)
+                # If the BIRT column name differs from the dataset column,
+                # it's an alias — use the real column name.
+                if real_col != name:
+                    name = real_col
+            if name in seen:
+                continue  # skip duplicate references
+            seen.add(name)
             columns.append({
-                "name": col.get("name", ""),
-                "expression": col.get("expression", ""),
+                "name": name,
+                "expression": expr,
                 "data_type": col.get("dataType", "string"),
                 "display_name": col.get("displayName", col.get("name", "")),
             })

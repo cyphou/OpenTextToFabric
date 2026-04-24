@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "opentext-to-fabric"
-version = "0.1.0"
+version = "0.7.0"
 description = "Automated migration of OpenText ECM and BIRT reports to Microsoft Fabric and Power BI"
 requires-python = ">=3.12"
 license = {text = "MIT"}

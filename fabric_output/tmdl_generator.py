@@ -25,6 +25,8 @@ class TMDLGenerator:
         self.calculation_groups: list[dict[str, Any]] = []
         # Data source connections keyed by source name
         self.data_sources: dict[str, dict[str, Any]] = {}
+        # Real M query expressions keyed by table name (from MQueryGenerator)
+        self._partition_m_queries: dict[str, str] = {}
 
     def add_data_sources(self, connections: list[dict[str, Any]]) -> None:
         """Register data source connections so shared M expressions can be emitted."""
@@ -32,6 +34,22 @@ class TMDLGenerator:
             name = conn.get("name")
             if name:
                 self.data_sources[sanitize_name(name)] = conn
+
+    def set_partition_m_queries(
+        self,
+        m_query_results: list[dict[str, Any]],
+    ) -> None:
+        """Set real Power Query M expressions for table partitions.
+
+        Args:
+            m_query_results: Output of ``MQueryGenerator.generate_from_datasets()``,
+                each containing ``dataset_name`` and ``m_query``.
+        """
+        for entry in m_query_results:
+            table_name = sanitize_name(entry.get("dataset_name", ""))
+            m_query = entry.get("m_query", "")
+            if table_name and m_query and not m_query.startswith("//"):
+                self._partition_m_queries[table_name] = m_query
 
     def add_table_from_dataset(self, dataset: dict[str, Any]) -> dict[str, Any]:
         """Add a table from a BIRT dataset definition.
@@ -46,11 +64,22 @@ class TMDLGenerator:
 
         columns: list[dict[str, Any]] = []
 
-        # From result columns / column hints
+        # Collect computed column names — BIRT lists them in both
+        # result_columns and computed_columns.  Skip them from
+        # result_columns so they are added only once (as regular
+        # sourceColumn-based columns — the M query generator adds
+        # Table.AddColumn steps for them in Power Query).
+        computed_names: set[str] = set()
+        for cc in dataset.get("computed_columns", []):
+            col_name = cc.get("name", "")
+            if col_name:
+                computed_names.add(sanitize_name(col_name))
+
+        # From result columns / column hints — skip computed columns
         seen_names: set[str] = set()
         for col in dataset.get("result_columns", []):
             col_safe = sanitize_name(col.get("name", col.get("columnName", "")))
-            if col_safe in seen_names:
+            if col_safe in seen_names or col_safe in computed_names:
                 continue
             seen_names.add(col_safe)
             columns.append({
@@ -65,7 +94,7 @@ class TMDLGenerator:
         for hint in dataset.get("column_hints", []):
             col_name = hint.get("columnName", hint.get("name", ""))
             col_safe = sanitize_name(col_name) if col_name else ""
-            if col_safe and col_safe not in seen_names:
+            if col_safe and col_safe not in seen_names and col_safe not in computed_names:
                 seen_names.add(col_safe)
                 columns.append({
                     "name": sanitize_name(col_name),
@@ -77,7 +106,8 @@ class TMDLGenerator:
                     "isHidden": False,
                 })
 
-        # Computed columns → calculated columns
+        # Computed columns → regular sourceColumn columns.
+        # The M query generator produces them via Table.AddColumn.
         for cc in dataset.get("computed_columns", []):
             col_name = cc.get("name", "")
             col_safe = sanitize_name(col_name) if col_name else ""
@@ -88,8 +118,7 @@ class TMDLGenerator:
                     "dataType": BIRT_TO_TMDL_TYPE.get(
                         cc.get("dataType", "string").lower(), "string"
                     ),
-                    "type": "calculated",
-                    "expression": self._birt_js_to_dax(cc.get("expression", "")),
+                    "sourceColumn": col_name,
                     "isHidden": False,
                 })
 
@@ -498,16 +527,23 @@ class TMDLGenerator:
     def _birt_js_to_dax(expr: str) -> str:
         """Translate simple BIRT JavaScript expressions to DAX.
 
-        Handles `row["col"]` / `row['col']` / `row.col` -> `[col]` and the
-        common JS operators that map 1:1 to DAX. Anything that doesn't match
-        is returned unchanged so the user can fix it in PBI.
+        Handles ``row["col"]`` / ``row['col']`` / ``row.col`` →  ``[col]``
+        and common JS operators that map 1:1 to DAX.  Anything that doesn't
+        match is returned unchanged so the user can fix it in PBI.
         """
         import re
         if not expr:
             return expr
         out = expr
-        out = re.sub(r"row\[\s*[\"']([\w]+)[\"']\s*\]", r"[\1]", out)
+        # row["Column Name"] or row['Column Name'] — allow any chars inside quotes
+        out = re.sub(r'row\[\s*"([^"]+)"\s*\]', r"[\1]", out)
+        out = re.sub(r"row\[\s*'([^']+)'\s*\]", r"[\1]", out)
         out = re.sub(r"\brow\.([A-Za-z_]\w*)", r"[\1]", out)
+        # JS null → BLANK()
+        out = re.sub(r"\bnull\b", "BLANK()", out)
+        # JS != → DAX <>
+        out = out.replace("!=", "<>")
+        # JS && → DAX &&, JS || → DAX || (same in DAX)
         return out
 
     # M type tokens for #table column type list
@@ -611,18 +647,36 @@ class TMDLGenerator:
                 lines.append("")
 
         # Partition (M query source).
-        # We emit a SINGLE-LINE M expression to avoid TMDL multi-line parsing
-        # quirks (triple-backtick fences are inconsistently supported by the
-        # PBI Desktop M engine when crossing file boundaries). The expression
-        # is a self-contained #table literal whose schema matches the columns
-        # declared above, so the model always loads in PBI Desktop. The
-        # original SQL and data source are preserved as TMDL annotations so
-        # users can swap in the real connector later.
+        # If a real M query was provided via set_partition_m_queries(), use it
+        # with triple-backtick fencing for multi-line expressions. Otherwise
+        # fall back to a self-contained #table literal so the model always
+        # loads in PBI Desktop.
         part_name = self._quote_name(table['name'])
-        m_expr = self._build_partition_m(table)
-        lines.append(f"\tpartition {part_name} = m")
-        lines.append("\t\tmode: import")
-        lines.append(f"\t\tsource = {m_expr}")
+        real_m = self._partition_m_queries.get(table['name'], "")
+        if real_m and "\n" in real_m:
+            # Multi-line M expression — use triple-backtick fence
+            # try/otherwise MUST be inside the fence so TMDL parser
+            # treats the entire block as one M expression.
+            lines.append(f"\tpartition {part_name} = m")
+            lines.append("\t\tmode: import")
+            lines.append("\t\tsource =```")
+            lines.append("\t\t\ttry")
+            for m_line in real_m.split("\n"):
+                lines.append(f"\t\t\t\t{m_line}")
+            lines.append("\t\t\totherwise")
+            lines.append("\t\t\t\t#table({}, {})")
+            lines.append("\t\t\t```")
+        elif real_m:
+            # Single-line M expression
+            lines.append(f"\tpartition {part_name} = m")
+            lines.append("\t\tmode: import")
+            lines.append(f"\t\tsource = {real_m}")
+        else:
+            # Fallback: empty #table literal
+            m_expr = self._build_partition_m(table)
+            lines.append(f"\tpartition {part_name} = m")
+            lines.append("\t\tmode: import")
+            lines.append(f"\t\tsource = {m_expr}")
         lines.append("")
 
         return "\n".join(lines)

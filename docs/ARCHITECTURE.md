@@ -121,7 +121,7 @@ Documentum REST Services
 ├── <data-sets>             → SQL queries, parameters, computed columns
 │   ├── <query-text>        → SQL statement
 │   ├── <parameters>        → Input parameters (type, default)
-│   └── <computed-columns>  → BIRT expressions → DAX candidates
+│   └── <computed-columns>  → BIRT expressions → Power Query M `Table.AddColumn`
 ├── <body>                  → Report layout
 │   ├── <table>             → Tabular data display
 │   ├── <extended-item>     → Charts (bar, line, pie, scatter)
@@ -164,7 +164,7 @@ Documentum REST Services
 | `notebook_generator.py` | documents, metadata | PySpark ETL notebooks (document processing) |
 | `dataflow_generator.py` | connections, datasets | Dataflow Gen2 M queries (incremental ingestion) |
 | `tmdl_generator.py` | datasets, expressions | TMDL semantic model (tables, measures, relationships, hierarchies, calc groups, RLS) |
-| `m_query_generator.py` | connections | Power Query M for 40+ data source connectors |
+| `m_query_generator.py` | connections | Power Query M for 40+ data source connectors + BIRT computed column `Table.AddColumn` |
 | `dax_recipes.py` | datasets, industry config | Industry-specific KPI measure templates (Healthcare, Finance, Retail, Manufacturing) |
 
 #### Report Conversion (`report_converter/`)
@@ -173,8 +173,8 @@ Documentum REST Services
 |--------|-------|--------|
 | `birt_parser.py` | .rptdesign XML | Parsed report structure (intermediate dicts) |
 | `expression_converter.py` | BIRT JS expressions | DAX formulas (80+ conversions) |
-| `visual_mapper.py` | BIRT visuals JSON | PBI visual configs (140+ PBIR v4.0 mappings) |
-| `pbip_generator.py` | All report JSON | .pbip project (report + semantic model + bookmarks) |
+| `visual_mapper.py` | BIRT visuals JSON | PBI visual configs (140+ PBIR v4.0 mappings) + alias resolution |
+| `pbip_generator.py` | All report JSON | .pbip project (report + semantic model + bookmarks) + sanitized field refs |
 | `conditional_format.py` | BIRT highlight rules | PBI conditional formatting rules |
 | `drill_through.py` | BIRT sub-reports/links | Drill-through pages with filter propagation |
 | `multi_datasource.py` | Multiple connections | Composite model with cross-source relationships |
@@ -248,7 +248,8 @@ ECM migrations require deep permission mapping. Governance is not optional:
 | Secondary output | Fabric artifacts | .pbip (for BIRT reports only) |
 | Binary content | None (no document migration) | Full document binary migration |
 | Permissions | Basic RLS from Tableau user filters | Deep ACL → RLS + Purview mapping |
-| Formula language | Tableau calc → DAX (180+ mappings) | BIRT JavaScript → DAX (80+ mappings) + DAX optimizer |
-| Visual types | 118+ visual type mappings | 140+ visual type mappings |
+| Formula language | Tableau calc → DAX (180+ mappings) | BIRT JavaScript → DAX (80+ mappings) + DAX optimizer + M computed columns |
+| Visual types | 118+ visual type mappings | 140+ visual type mappings + alias resolution |
 | Connectors | 33 connector types | 40+ M query connectors |
+| Self-healing | None | 23-method artifact healer (DAX, TMDL, M, PBIR) |
 | Agents | 12 (DAX/Wiring/Semantic/Visual specialists) | 10 (@content + @governance are new) |

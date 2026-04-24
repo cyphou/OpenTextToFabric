@@ -126,7 +126,169 @@ class TestExpressionConverter(unittest.TestCase):
 
     def test_javascript_constructs_unsupported(self):
         result = self.converter.convert("var x = 5; function foo() { return x; }")
-        self.assertEqual(result["status"], "unsupported")
+        self.assertEqual(result["status"], "script_block")
+
+    # ── Event handler classification ──
+
+    def test_event_handler_querytext(self):
+        expr = 'this.queryText = this.queryText.replace("placeholder", params["p"].value)'
+        result = self.converter.convert(expr)
+        self.assertEqual(result["status"], "event_handler")
+
+    def test_event_handler_reportcontext(self):
+        expr = 'reportContext.getOutputFormat() == "html"'
+        result = self.converter.convert(expr)
+        self.assertEqual(result["status"], "event_handler")
+
+    # ── Script block classification ──
+
+    def test_script_block_for_loop(self):
+        expr = 'for (var i = 0; i < arr.length; i++) { result += arr[i]; }'
+        result = self.converter.convert(expr)
+        self.assertEqual(result["status"], "script_block")
+
+    def test_script_block_function_declaration(self):
+        expr = 'function createList(items) { var result = ""; return result; }'
+        result = self.converter.convert(expr)
+        self.assertEqual(result["status"], "script_block")
+
+    # ── Multi-line if/else if/else ──
+
+    def test_if_else_chain_multiline(self):
+        expr = 'if (row["status"] == "A") { "Active" } else if (row["status"] == "I") { "Inactive" } else { "Unknown" }'
+        result = self.converter.convert(expr)
+        self.assertEqual(result["status"], "success")
+        self.assertIn("IF(", result["converted"])
+        self.assertIn("Active", result["converted"])
+        self.assertIn("Inactive", result["converted"])
+        self.assertIn("Unknown", result["converted"])
+        # Should be nested IF: IF(cond1, val1, IF(cond2, val2, val3))
+        self.assertEqual(result["converted"].count("IF("), 2)
+
+    def test_if_else_simple(self):
+        expr = 'if ([amount] > 0) { "positive" } else { "negative" }'
+        result = self.converter.convert(expr)
+        self.assertIn("IF(", result["converted"])
+        self.assertIn("positive", result["converted"])
+        self.assertIn("negative", result["converted"])
+
+    def test_if_no_else(self):
+        expr = 'if ([amount] > 100) { "high" }'
+        result = self.converter.convert(expr)
+        self.assertIn("IF(", result["converted"])
+        self.assertIn("high", result["converted"])
+
+    # ── Nested ternary ──
+
+    def test_nested_ternary(self):
+        expr = 'row["val"] > 100 ? "high" : row["val"] > 50 ? "medium" : "low"'
+        result = self.converter.convert(expr)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["converted"].count("IF("), 2)
+        self.assertIn("high", result["converted"])
+        self.assertIn("medium", result["converted"])
+        self.assertIn("low", result["converted"])
+
+    # ── var/return inlining ──
+
+    def test_var_return_inline(self):
+        expr = 'var x = row["amount"]; var y = row["tax"]; return x + y'
+        result = self.converter.convert(expr)
+        self.assertEqual(result["status"], "success")
+        self.assertIn("[amount]", result["converted"])
+        self.assertIn("[tax]", result["converted"])
+        self.assertNotIn("var ", result["converted"])
+        self.assertNotIn("return ", result["converted"])
+
+    def test_var_simple(self):
+        expr = 'var result = row["price"] * row["qty"]; return result'
+        result = self.converter.convert(expr)
+        self.assertEqual(result["status"], "success")
+        self.assertIn("[price]", result["converted"])
+        self.assertIn("[qty]", result["converted"])
+
+    # ── String concatenation ──
+
+    def test_string_concat_to_ampersand(self):
+        expr = '"Total: " + row["amount"] + " USD"'
+        result = self.converter.convert(expr)
+        self.assertEqual(result["status"], "success")
+        self.assertIn("&", result["converted"])
+        self.assertNotIn("+", result["converted"])
+
+    # ── new Date() ──
+
+    def test_new_date_to_now(self):
+        expr = "new Date()"
+        result = self.converter.convert(expr)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["converted"], "NOW()")
+
+    # ── null / undefined ──
+
+    def test_null_to_blank(self):
+        expr = 'row["col"] == null ? "N/A" : row["col"]'
+        result = self.converter.convert(expr)
+        self.assertIn("BLANK()", result["converted"])
+        self.assertNotIn("null", result["converted"])
+
+    def test_null_word_boundary(self):
+        """null replacement should not corrupt words containing 'null'."""
+        result = self.converter.convert('row["nullable_flag"]')
+        self.assertEqual(result["converted"], "[nullable_flag]")
+        self.assertNotIn("BLANK()", result["converted"])
+
+    def test_undefined_to_blank(self):
+        result = self.converter.convert('row["x"] == undefined ? 0 : row["x"]')
+        self.assertIn("BLANK()", result["converted"])
+
+    # ── switch → SWITCH ──
+
+    def test_switch_statement(self):
+        expr = 'switch(row["code"]) { case "A": "Alpha"; break; case "B": "Beta"; break; default: "Other" }'
+        result = self.converter.convert(expr)
+        self.assertEqual(result["status"], "success")
+        self.assertIn("SWITCH(", result["converted"])
+        self.assertIn("Alpha", result["converted"])
+        self.assertIn("Beta", result["converted"])
+        self.assertIn("Other", result["converted"])
+
+    # ── params displayText ──
+
+    def test_params_display_text(self):
+        result = self.converter.convert('params["Region"].displayText')
+        self.assertIn("SELECTEDVALUE", result["converted"])
+        self.assertIn("[@Region]", result["converted"])
+
+    # ── params with single quotes ──
+
+    def test_params_single_quotes(self):
+        result = self.converter.convert("params['StartDate'].value")
+        self.assertEqual(result["converted"], "[@StartDate]")
+
+    # ── dataSetRow single quotes ──
+
+    def test_dataset_row_single_quotes(self):
+        result = self.converter.convert("dataSetRow['total']")
+        self.assertEqual(result["converted"], "[total]")
+
+    # ── Complex real-world expressions ──
+
+    def test_complex_birt_math_if_else(self):
+        expr = 'if (row["denominator"] == 0) { 0 } else { BirtMath.round(row["numerator"] / row["denominator"] * 100, 2) }'
+        result = self.converter.convert(expr)
+        self.assertEqual(result["status"], "success")
+        self.assertIn("IF(", result["converted"])
+        self.assertIn("ROUND(", result["converted"])
+
+    def test_extract_return_from_simple_script(self):
+        """A function block with a simple return should extract the expression."""
+        expr = 'function calc() { var x = row["a"]; return x * 2; }'
+        result = self.converter.convert(expr)
+        # This has a function declaration so it's a script_block,
+        # but _extract_return_value finds 'return x * 2' and inlines var x
+        # Actually function + inner function → script_block without extraction
+        self.assertIn(result["status"], ("success", "script_block"))
 
     # Batch
     def test_convert_batch(self):

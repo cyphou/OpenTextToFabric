@@ -1,9 +1,9 @@
 # Development Plan — OpenText to Power BI / Fabric Migration Tool
 
-**Version:** v0.6.0  
-**Date:** 2026-06-13  
-**Current state:** Enterprise hardening — 816 tests, 140+ visual types, 40+ M connectors, telemetry, regression, incremental sync, multi-tenant deployment  
-**Target:** Production-ready enterprise migration tool with AI-powered assistance and v1.0 release
+**Version:** v0.7.0  
+**Date:** 2026-04-24  
+**Current state:** Post-enterprise hardening — 878 tests, 53 source modules, self-healing artifact healer (23 fix methods), BIRT computed columns → Power Query M, visual field sanitization, alias resolution  
+**Target:** Production-ready enterprise migration tool with AI-powered assistance and v2.0 ecosystem
 
 ---
 
@@ -493,68 +493,106 @@ See [AGENTS.md](AGENTS.md) for full architecture, data flow, and handoff protoco
 
 ---
 
-## Phase 7 — Performance Optimization & v1.0 Release (Sprints 37–42) 🔲 NEXT
+## Phase 6.5 — BIRT Fidelity Hardening (Sprint 36.5) ✅ DONE
 
-> **Goal:** Production-grade performance, comprehensive documentation, security certification, and v1.0.0 release.
+> **Goal:** Fix PBI Desktop load errors for migrated BIRT reports — computed column strategy, M query syntax, visual field references, and self-healing healer audit.
+>
+> **Timeline:** April 2026 (mid-sprint) · **Prereqs:** Phase 6 complete
 
-### Sprint 37 — Performance Optimization
+### Sprint 36.5 — BIRT Report Debugging & Healer Expansion
+
+| Item | Owner | Status | Details |
+|------|-------|--------|--------|
+| Computed columns → Power Query M | @semantic | ✅ | BIRT computed columns now generate `Table.AddColumn` in M (not DAX calculated columns). New `_birt_js_to_m()` converter handles `row["col"]`, `BirtMath.round`, `if/else`, `&&`/`||` |
+| M identifier quoting | @semantic | ✅ | `_m_field_ref()` helper: simple names → `[Name]`, names with spaces/accents → `[#"Name"]` |
+| M if/then/else balance | @semantic | ✅ | `_birt_js_to_m()` counts `if` vs `else` and appends `else null` for each unmatched `if` |
+| BIRT alias resolution | @report | ✅ | `_map_table_columns()` resolves `dataSetRow["X"]` aliases to real column names + deduplicates |
+| Visual field sanitization | @report | ✅ | `_make_projection()` now sanitizes `Property`/`Entity` via `sanitize_name()` to match TMDL |
+| Healer: visual field validation | @assessor | ✅ | New `_heal_visual_field_refs()` + `_collect_tmdl_columns()` — strips projections referencing non-existent TMDL columns |
+| Healer: broken M regex removed | @assessor | ✅ | Removed `_fix_m_if_else_balance()` whose regex couldn't handle nested parens |
+| Healer audit (23 methods) | @assessor | ✅ | All 23 healing methods verified: 6 DAX + 7 TMDL + 4 M query + 6 PBIR fixes |
+| Tests: 816 → 878 | @tester | ✅ | 62 new tests, 45 test files, all green |
+
+### Phase 6.5 Success Criteria
+
+| Metric | Target | Actual |
+|--------|--------|--------|
+| Tests | 850+ | ✅ 878 (62 new tests) |
+| Source modules | 53 | ✅ 53 (2 new: artifact_healer enhancements, m_query computed cols) |
+| BIRT → PBI Desktop | Clean open (no warning triangles) | ✅ Visual fields match TMDL, healer catches orphans |
+| Healer coverage | All known PBI Desktop errors covered | ✅ 23 healing methods across DAX, TMDL, M, PBIR |
+| Computed columns | M-native (not DAX calculated) | ✅ `Table.AddColumn` in Power Query M |
+
+---
+
+## Phase 7 — Performance, Expression Coverage & v1.0 Release (Sprints 37–42) 🔲 NEXT
+
+> **Goal:** Double BIRT expression coverage (80 → 150+), optimize large-batch performance, comprehensive documentation, security certification, and v1.0.0 GA release.
+>
+> **Timeline:** Q2–Q3 2026 · **Prereqs:** Phase 6.5 complete · **Release:** v1.0.0
+
+### Sprint 37 — BIRT Expression Converter v2
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| Connection pooling | @extractor | 🔲 | HTTP session reuse for OT REST APIs (requests.Session pooling) |
-| Async I/O for file operations | @content | 🔲 | Parallel file download + upload via `concurrent.futures.ThreadPoolExecutor` |
-| Lazy XML parsing | @extractor | 🔲 | `iterparse` for large .rptdesign files (>50MB) to reduce memory |
-| Memory profiling | @tester | 🔲 | Ensure <500MB RSS for 1,000-report batch |
-| Stress test: 10,000 docs | @tester | 🔲 | Validate throughput target: 1,000 docs/hour on 4-core/16GB |
+| LOD expression support | @report | 🔲 | BIRT cross-tab aggregations → `CALCULATE` + `FILTER` + `ALL`/`ALLEXCEPT` patterns |
+| Window function mapping | @report | 🔲 | BIRT `RUNNINGSUM`, `RUNNINGCOUNT`, `RANK`, `PERCENTILE` → DAX `RANKX`, `SUMX`, `EARLIER` |
+| Date/time function expansion | @report | 🔲 | BIRT `DateTimeSpan`, `DateDiff`, `FormatDate`, `BirtDateTime.*` → DAX time intelligence |
+| String function expansion | @report | 🔲 | BIRT `LIKE`, `CHARINDEX`, `REPLACE`, `TRIMSTART` → DAX `SEARCH`, `SUBSTITUTE`, `TRIM` |
+| Target: 80 → 150 functions | @report | 🔲 | Focus: aggregation (20+), date (15+), string (10+), logical (10+), window (15+) |
 
-### Sprint 38 — Delta Ingestion & Conflict Resolution
-
-| Item | Owner | Status | Details |
-|------|-------|--------|---------|
-| Delta ingestion to Lakehouse | @pipeline | 🔲 | Merge (upsert) into Delta tables, tombstone deletes |
-| Conflict resolution strategy | @orchestrator | 🔲 | Config-driven: last-writer-wins, source-wins, manual-review |
-| Sync status dashboard | @orchestrator | 🔲 | HTML dashboard showing drift, pending changes, last sync timestamp |
-| Blue/green deployment | @deployer | 🔲 | Deploy to staging workspace → swap → rollback on failure |
-
-### Sprint 39 — Enterprise Documentation
+### Sprint 38 — Parameter Wiring & Data Model Improvements
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| Enterprise migration guide (8-phase) | @orchestrator | 🔲 | Assessment → planning → pilot → wave → validate → deploy → cutover → support |
-| BIRT → DAX reference guide | @report | 🔲 | Searchable table of all 80+ function mappings with examples |
-| Power Query M connector reference | @semantic | 🔲 | All 40+ JDBC/ODBC → M query patterns documented |
-| Troubleshooting guide | @orchestrator | 🔲 | Common issues, error codes, resolution steps |
-| API documentation | @orchestrator | 🔲 | Auto-generated API docs (pdoc) published to GitHub Pages |
+| Parameter → slicer wiring | @report | 🔲 | BIRT cascading parameters → PBI slicer sync groups with `ParameterSlicerBinder` |
+| Multi-value parameter support | @report | 🔲 | BIRT multi-select → PBI slicer with `IN` filter on underlying column |
+| Date range parameter → date slicer | @report | 🔲 | BIRT date-range parameters → PBI relative date / between slicer |
+| TMDL RLS parameterization | @semantic | 🔲 | Dynamic RLS with `USERPRINCIPALNAME()` + config-driven role-table mapping |
+| Relationship auto-repair | @semantic | 🔲 | Detect and fix broken/ambiguous relationships post-generation (expand `validator.py`) |
 
-### Sprint 40 — BIRT Expression Converter v2
-
-| Item | Owner | Status | Details |
-|------|-------|--------|---------|
-| LOD expression support | @report | 🔲 | BIRT cross-tab aggregations → CALCULATE + FILTER patterns |
-| Window function mapping | @report | 🔲 | BIRT running totals / rank → DAX RANKX, SUMX, EARLIER |
-| Date/time function expansion | @report | 🔲 | BIRT DateTimeSpan, DateDiff, FormatDate → DAX date intelligence |
-| Parameter → slicer wiring | @report | 🔲 | BIRT cascading parameters → PBI slicer sync groups |
-| Target: 80 → 150 functions | @report | 🔲 | Double function coverage, especially aggregation + date patterns |
-
-### Sprint 41 — Security Certification
+### Sprint 39 — Performance Optimization
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| Full OWASP review | @governance | 🔲 | Complete OWASP Top 10 audit of all modules |
-| PII detection pass | @governance | 🔲 | Regex-based PII scanner over extracted metadata (SSN, email, credit card) |
-| OWASP dependency check | @governance | 🔲 | Verify zero-dep core; document optional dep security posture |
-| Key Vault credential provider | @governance | 🔲 | Optional Azure Key Vault integration for OT server credentials |
-| Penetration test results | @governance | 🔲 | Documented pen test with remediation evidence |
+| HTTP connection pooling | @extractor | 🔲 | `requests.Session` with connection keep-alive and retry adapter (3 retries, backoff) |
+| Parallel BIRT parsing | @orchestrator | 🔲 | `concurrent.futures.ThreadPoolExecutor(max_workers=4)` for multi-file parsing |
+| Lazy XML parsing | @extractor | 🔲 | `xml.etree.ElementTree.iterparse` for .rptdesign files >50 MB to cap memory |
+| Streaming JSON output | @extractor | 🔲 | Write intermediate JSON incrementally (avoid holding full tree in memory) |
+| Memory profiling | @tester | 🔲 | `tracemalloc` benchmarks: ensure <500 MB RSS for 1,000-report batch |
+| Stress test: 500 reports | @tester | 🔲 | Validate throughput: ≥200 reports/hour on 4-core/16 GB (batch mode) |
 
-### Sprint 42 — v1.0.0 Release
+### Sprint 40 — Enterprise Documentation
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| Full regression suite | @tester | 🔲 | 1,200+ tests, 90%+ coverage |
-| Performance certification | @tester | 🔲 | Documented benchmarks on standard hardware |
-| Semantic versioning | @orchestrator | 🔲 | v1.0.0 tag, CHANGELOG, GitHub release with binaries |
-| PyPI package | @orchestrator | 🔲 | `pip install opentext-to-fabric` for optional deps |
-| CONTRIBUTING.md | @orchestrator | 🔲 | PR template, code standards, developer setup guide |
+| Enterprise migration guide | @orchestrator | 🔲 | 8-phase playbook: Discovery → Assessment → Planning → Pilot → Wave 1 → Wave N → Cutover → Hypercare |
+| BIRT → DAX reference | @report | 🔲 | Searchable Markdown table: all 150+ mappings with BIRT input, DAX output, notes |
+| M query connector guide | @semantic | 🔲 | All 40+ connectors: connection string template, required parameters, known limitations |
+| Troubleshooting guide | @orchestrator | 🔲 | Top 20 errors: error code, cause, resolution, example |
+| API reference (pdoc) | @orchestrator | 🔲 | Auto-generated HTML docs from docstrings → GitHub Pages via `gh-pages.yml` |
+
+### Sprint 41 — Security Certification & Hardening
+
+| Item | Owner | Status | Details |
+|------|-------|--------|---------|
+| OWASP Top 10 audit | @governance | 🔲 | Systematic review of all 51 modules against OWASP 2021 checklist |
+| PII detection scanner | @governance | 🔲 | Regex-based pass over extracted metadata: SSN, email, phone, credit card, IBAN |
+| Azure Key Vault provider | @governance | 🔲 | Optional `azure-keyvault-secrets` integration for OT/Azure credentials |
+| Security test suite | @tester | 🔲 | 50+ tests: injection, path traversal, XXE, SSRF, credential leak, PII masking |
+| Threat model document | @governance | 🔲 | STRIDE analysis: data flows, trust boundaries, mitigations |
+
+### Sprint 42 — v1.0.0 GA Release
+
+| Item | Owner | Status | Details |
+|------|-------|--------|---------|
+| Test target: 816 → 1,200+ | @tester | 🔲 | 384+ new tests: expression v2, parameter wiring, perf, security, E2E |
+| Coverage gate: ≥ 90% | @tester | 🔲 | Add `--cov-fail-under=90` to CI; fill gaps in deploy/ and reporting/ |
+| Performance certification | @tester | 🔲 | Published benchmarks: reports/hour, memory, latency per pipeline step |
+| CHANGELOG + version bump | @orchestrator | 🔲 | Semantic version v1.0.0, detailed changelog from v0.1 → v1.0 |
+| PyPI package | @orchestrator | 🔲 | `pip install opentext-to-fabric`, extras `[ocr]`, `[deploy]`, `[dev]` |
+| CONTRIBUTING.md | @orchestrator | 🔲 | PR template, branch strategy, code style (ruff), commit conventions |
+| GitHub release | @orchestrator | 🔲 | Release notes, binary artifacts, docs link |
 
 ### Phase 7 Success Criteria
 
@@ -562,305 +600,324 @@ See [AGENTS.md](AGENTS.md) for full architecture, data flow, and handoff protoco
 |--------|--------|
 | Tests | 1,200+ |
 | Coverage | ≥ 90% |
-| Batch throughput | 1,000 docs/hour on 4-core / 16GB |
 | BIRT functions | 150+ conversions |
-| Documentation | 5 guides + API docs |
-| Release | v1.0.0 on GitHub + PyPI |
+| Batch throughput | ≥ 200 reports/hour on 4-core / 16 GB |
+| Memory ceiling | < 500 MB RSS for 1,000-report batch |
+| Documentation | 5 guides + auto-generated API reference |
+| Security | OWASP audit + STRIDE threat model + PII scanner |
+| Release | v1.0.0 GA on GitHub + PyPI |
 
 ---
 
-## Phase 8 — AppWorks & Extended ECM Migration (Sprints 43–48) 🔲 PLANNED
+## Phase 8 — Workflow Migration & Extended ECM (Sprints 43–48) 🔲 PLANNED
 
-> **Goal:** Extend migration coverage to OpenText AppWorks low-code platform, Extended ECM integrations (SAP/Salesforce), and Power Automate workflow conversion.
+> **Goal:** Migrate OpenText workflows to Power Automate, integrate Extended ECM (SAP/Salesforce-linked documents), and add Delta ingestion with conflict resolution.
+>
+> **Timeline:** Q3–Q4 2026 · **Prereqs:** Phase 7 v1.0 · **Release:** v1.1.0
 
-### Sprint 43 — AppWorks Metadata Extraction
-
-| Item | Owner | Status | Details |
-|------|-------|--------|---------|
-| AppWorks REST API client | @extractor | 🔲 | Connect to AppWorks platform, extract app definitions |
-| Form definition extraction | @extractor | 🔲 | Extract form layouts, fields, validation rules, picklists |
-| Business rule extraction | @extractor | 🔲 | Extract workflow rules, conditions, actions → JSON intermediate |
-| Role/permission extraction | @governance | 🔲 | AppWorks roles → Fabric workspace permissions mapping |
-
-### Sprint 44 — AppWorks → Power Apps/Automate
+### Sprint 43 — OpenText Workflow Extraction
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| Form → Power Apps screen | @pipeline | 🔲 | AppWorks form → Power Apps canvas app (metadata export) |
-| Workflow → Power Automate | @pipeline | 🔲 | AppWorks workflows → Power Automate flow definitions (JSON) |
-| Business rules → logic | @pipeline | 🔲 | Condition/action mapping to Power Automate expressions |
-| Data source rebinding | @semantic | 🔲 | AppWorks data entities → Dataverse / Lakehouse tables |
+| CS workflow parser | @extractor | 🔲 | Parse Content Server workflow maps, step definitions, routes, sub-workflows |
+| Workflow → intermediate JSON | @extractor | 🔲 | `workflows_detailed.json`: steps, conditions, actions, assignees, deadlines, SLAs |
+| Workflow visualization | @assessor | 🔲 | Generate Mermaid/HTML flow diagram from parsed workflow for assessment |
+| Workflow complexity scorer | @assessor | 🔲 | Score based on: step count, branching depth, integration points, parallel paths |
 
-### Sprint 45 — Extended ECM Integration Layer
-
-| Item | Owner | Status | Details |
-|------|-------|--------|---------|
-| SAP ArchiveLink extraction | @extractor | 🔲 | SAP-linked documents, metadata, business objects |
-| Salesforce integration metadata | @extractor | 🔲 | SFDC-linked documents, case attachments, custom objects |
-| Business workspace mapping | @pipeline | 🔲 | OT business workspaces → Fabric workspace structure |
-| Cross-system lineage | @governance | 🔲 | Document lineage across OT ↔ SAP ↔ Salesforce → Purview lineage |
-
-### Sprint 46 — OpenText Workflow → Power Automate
+### Sprint 44 — Workflow → Power Automate
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| CS workflow parser | @extractor | 🔲 | Content Server workflow definitions → intermediate JSON |
-| Step/action mapping | @pipeline | 🔲 | OT workflow steps → Power Automate actions (approval, email, condition) |
-| User/group resolution | @governance | 🔲 | OT workflow assignees → Azure AD users/groups |
-| Parallel path support | @pipeline | 🔲 | OT parallel steps → Power Automate parallel branches |
+| Step → action mapping | @pipeline | 🔲 | OT steps → PA actions: Approval, SendEmail, Condition, UpdateItem, HTTP |
+| Parallel/serial path support | @pipeline | 🔲 | OT parallel branches → PA `Parallel branch`; serial → sequential actions |
+| User/group resolution | @governance | 🔲 | OT workflow participants → Azure AD users/groups via mapping table |
+| Power Automate JSON export | @pipeline | 🔲 | Generate importable PA flow definition (OpenAPI-based JSON schema) |
+| Workflow migration tests | @tester | 🔲 | 60+ tests with mock OT workflows → PA flow validation |
 
-### Sprint 47 — Extended ECM → Fabric Pipelines
+### Sprint 45 — Delta Ingestion & Conflict Resolution
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| SAP document pipeline | @pipeline | 🔲 | SAP ArchiveLink → OneLake ingestion pipeline |
-| SFDC document pipeline | @pipeline | 🔲 | Salesforce file attachments → OneLake pipeline |
-| Business workspace → Lakehouse | @pipeline | 🔲 | Workspace metadata → Lakehouse fact/dimension tables |
-| Integration tests | @tester | 🔲 | 150+ tests for AppWorks/ExtECM modules |
+| Delta merge to Lakehouse | @pipeline | 🔲 | PySpark notebook with `MERGE INTO` for Delta tables (insert/update/soft-delete) |
+| Change detection integration | @orchestrator | 🔲 | Wire `ChangeDetector` from `reporting/incremental.py` into pipeline orchestration |
+| Conflict resolution engine | @orchestrator | 🔲 | Config: `last-writer-wins` (default), `source-wins`, `manual-review` with conflict log |
+| Sync status dashboard | @orchestrator | 🔲 | HTML dashboard: last sync time, pending changes, conflict count, drift metrics |
+
+### Sprint 46 — Extended ECM Integration Layer
+
+| Item | Owner | Status | Details |
+|------|-------|--------|---------|
+| SAP ArchiveLink client | @extractor | 🔲 | Extract SAP-linked documents: `ArchiveLink` metadata, business object references |
+| Salesforce files client | @extractor | 🔲 | Extract SFDC-linked documents: `ContentVersion`, `Attachment`, case/object references |
+| Business workspace mapper | @pipeline | 🔲 | OT business workspaces → Fabric workspace structure (1:1 or N:1 mapping) |
+| Cross-system lineage | @governance | 🔲 | Document provenance: OT ↔ SAP/SFDC → Purview lineage edges |
+
+### Sprint 47 — Extended ECM Pipelines
+
+| Item | Owner | Status | Details |
+|------|-------|--------|---------|
+| SAP document pipeline | @pipeline | 🔲 | PySpark notebook: SAP ArchiveLink API → OneLake staging → Delta merge |
+| SFDC document pipeline | @pipeline | 🔲 | PySpark notebook: SFDC Bulk API → OneLake staging → Delta merge |
+| Metadata enrichment | @pipeline | 🔲 | Cross-reference OT metadata with SAP/SFDC business object fields |
+| Integration tests | @tester | 🔲 | 100+ tests for ExtECM extraction + pipeline generation (mock APIs) |
 
 ### Sprint 48 — Phase 8 Stabilization
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| E2E AppWorks test | @tester | 🔲 | Full pipeline: AppWorks → Power Apps + Automate (mock APIs) |
-| E2E ExtECM test | @tester | 🔲 | SAP/SFDC document extraction → Lakehouse (mock APIs) |
-| Documentation: AppWorks guide | @orchestrator | 🔲 | AppWorks migration reference with supported features |
-| v1.1.0 release | @orchestrator | 🔲 | AppWorks + ExtECM release |
+| E2E workflow migration test | @tester | 🔲 | CS workflow → PA flow: 5 template workflows (approval, review, distribution, escalation, parallel) |
+| E2E ExtECM test | @tester | 🔲 | SAP/SFDC → Lakehouse full pipeline with mock API responses |
+| Blue/green deployment | @deployer | 🔲 | Deploy to staging workspace → validate → swap → rollback on failure |
+| v1.1.0 release | @orchestrator | 🔲 | Workflow migration + ExtECM + Delta ingestion release |
 
 ### Phase 8 Success Criteria
 
 | Metric | Target |
 |--------|--------|
 | Tests | 1,500+ |
-| AppWorks modules | Form + workflow + rule extraction |
-| Power Automate | OT workflows → Automate flows |
-| Extended ECM | SAP + Salesforce document migration |
+| Workflow types | 5 OT workflow patterns → Power Automate flows |
+| Extended ECM | SAP ArchiveLink + Salesforce document extraction |
+| Delta ingestion | Upsert/soft-delete with conflict resolution |
 | Release | v1.1.0 |
 
 ---
 
-## Phase 9 — AI-Powered Migration Assistance (Sprints 49–54) 🔲 PLANNED
+## Phase 9 — AppWorks Migration & AI Assistance (Sprints 49–54) 🔲 PLANNED
 
-> **Goal:** Leverage LLMs and AI to improve migration quality — smart expression conversion, auto-healing for failed conversions, and AI-powered recommendations.
+> **Goal:** Migrate OpenText AppWorks low-code apps to Power Platform, and introduce LLM-assisted expression conversion for expressions that fail rule-based mapping.
+>
+> **Timeline:** Q4 2026 – Q1 2027 · **Prereqs:** Phase 8 workflow patterns · **Release:** v1.2.0
 
-### Sprint 49 — LLM-Assisted Expression Conversion
-
-| Item | Owner | Status | Details |
-|------|-------|--------|---------|
-| GPT/Claude expression fallback | @report | 🔲 | For BIRT expressions that fail rule-based conversion, use LLM to generate DAX |
-| Prompt engineering framework | @report | 🔲 | Templated prompts with BIRT context → DAX output (few-shot examples) |
-| Conversion confidence scoring | @report | 🔲 | Each LLM-generated DAX gets a confidence score (0-1) + human review flag |
-| Cost control (token budget) | @orchestrator | 🔲 | Per-report and per-batch token budgets with fallback to rule-based |
-
-### Sprint 50 — Auto-Healing Pipeline
+### Sprint 49 — AppWorks Metadata Extraction
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| TMDL validation + auto-fix | @semantic | 🔲 | Detect broken relationships, duplicate columns → auto-repair |
-| PBIR validation + auto-fix | @report | 🔲 | Missing visual bindings, invalid references → auto-reconnect |
-| Self-healing retry logic | @orchestrator | 🔲 | Failed items → diagnose → apply fix → retry (up to 3 attempts) |
-| Healing audit trail | @governance | 🔲 | Log every auto-fix decision for compliance review |
+| AppWorks REST API client | @extractor | 🔲 | Connect to AppWorks Designer/Runtime APIs; extract entity definitions |
+| Form definition extraction | @extractor | 🔲 | Form layouts, fields (text/date/picklist/lookup), validation rules → JSON |
+| Business rule extraction | @extractor | 🔲 | Workflow rules, conditions, actions, event handlers → JSON |
+| AppWorks role/permission map | @governance | 🔲 | AppWorks roles → Fabric workspace roles + Dataverse security roles |
 
-### Sprint 51 — Smart Migration Recommendations
-
-| Item | Owner | Status | Details |
-|------|-------|--------|---------|
-| Report complexity prediction | @assessor | 🔲 | ML model to predict migration effort from BIRT structure |
-| Wave planning optimizer | @assessor | 🔲 | Optimal wave assignment using dependency analysis + complexity scores |
-| Similar report detection | @assessor | 🔲 | Semantic fingerprinting to detect duplicate/similar reports → merge recommendations |
-| Migration ROI calculator | @assessor | 🔲 | Cost/benefit analysis per report (manual effort vs automated conversion quality) |
-
-### Sprint 52 — Copilot Integration
+### Sprint 50 — AppWorks → Power Platform
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| VS Code Copilot agent | @orchestrator | 🔲 | `@opentext-migrate` agent for interactive migration in VS Code |
-| Natural language migration | @orchestrator | 🔲 | "Migrate all sales reports from Content Server to Fabric" → CLI command |
-| Migration assistant chat | @orchestrator | 🔲 | Interactive Q&A about migration status, issues, recommendations |
-| Copilot-generated DAX review | @report | 🔲 | Copilot reviews generated DAX and suggests improvements |
+| Entity → Dataverse table | @semantic | 🔲 | AppWorks entities → Dataverse table definitions (metadata export, not provisioning) |
+| Form → Power Apps screen | @pipeline | 🔲 | AppWorks form layout → Power Apps canvas app JSON (screens, controls, data bindings) |
+| Business rules → PA flows | @pipeline | 🔲 | AppWorks event handlers → Power Automate trigger + action chains |
+| Data migration plan | @assessor | 🔲 | AppWorks data volume → Dataverse/Lakehouse routing recommendation |
 
-### Sprint 53 — AI-Enhanced Governance
+### Sprint 51 — LLM-Assisted Expression Conversion
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| AI-powered PII detection | @governance | 🔲 | NER-based PII detection in document content (beyond regex patterns) |
-| Classification recommendation | @governance | 🔲 | Suggest Purview labels based on document content analysis |
-| Anomaly detection | @governance | 🔲 | Flag unusual permission patterns, over-privileged access |
-| Compliance report generation | @governance | 🔲 | Auto-generate compliance summary for auditors |
+| Azure OpenAI integration | @report | 🔲 | `openai` SDK client with Azure AD auth, model selection (GPT-4o), retry logic |
+| Prompt template library | @report | 🔲 | Few-shot prompts: BIRT expression + schema context → DAX output + confidence |
+| Confidence scoring | @report | 🔲 | Each LLM-generated DAX gets confidence 0.0–1.0; <0.7 → flagged for human review |
+| Token budget control | @orchestrator | 🔲 | Per-report and per-batch token caps; fallback to rule-based on budget exhaustion |
+| Cost-quality benchmark | @tester | 🔲 | Measure: cost/expression, accuracy vs. rule-based, latency overhead |
+
+### Sprint 52 — Auto-Healing Pipeline
+
+| Item | Owner | Status | Details |
+|------|-------|--------|---------|
+| TMDL validation + auto-fix | @semantic | 🔲 | Detect broken relationships, orphan columns, ambiguous paths → auto-repair rules |
+| PBIR validation + auto-fix | @report | 🔲 | Missing visual bindings, invalid field references → auto-reconnect to closest match |
+| Self-healing retry logic | @orchestrator | 🔲 | Failed migration items → diagnose error class → apply fix → retry (max 3 attempts) |
+| Healing audit trail | @governance | 🔲 | Log every auto-fix: original error, fix applied, result, manual review flag |
+
+### Sprint 53 — Smart Migration Recommendations
+
+| Item | Owner | Status | Details |
+|------|-------|--------|---------|
+| Complexity prediction model | @assessor | 🔲 | Feature-based scoring (expression count, visual count, source count, parameter count) → effort estimate |
+| Similar report detection | @assessor | 🔲 | Semantic fingerprinting: dataset schemas + expression patterns → duplicate/similar report clusters |
+| Wave planning optimizer | @assessor | 🔲 | Dependency-aware wave assignment: shared data sources group together, complexity-balanced waves |
+| Migration ROI calculator | @assessor | 🔲 | Per-report: estimated manual hours vs. automated quality score → prioritization matrix |
 
 ### Sprint 54 — Phase 9 Stabilization
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| LLM conversion tests | @tester | 🔲 | 100+ test cases for LLM fallback accuracy |
-| Auto-healing tests | @tester | 🔲 | Intentionally broken artifacts → verify auto-fix |
-| Cost/quality benchmarks | @tester | 🔲 | LLM cost vs quality improvement measurement |
-| v1.2.0 release | @orchestrator | 🔲 | AI-powered migration release |
+| AppWorks E2E test | @tester | 🔲 | 3 AppWorks app templates → Power Apps + Automate (mock APIs) |
+| LLM conversion tests | @tester | 🔲 | 100+ test cases: rule-based fails → LLM fallback → accuracy measurement |
+| Auto-healing tests | @tester | 🔲 | Intentionally broken artifacts → verify auto-fix applies correctly |
+| v1.2.0 release | @orchestrator | 🔲 | AppWorks + AI-assisted migration release |
 
 ### Phase 9 Success Criteria
 
 | Metric | Target |
 |--------|--------|
 | Tests | 1,800+ |
-| LLM conversion accuracy | ≥ 85% for unsupported expressions |
-| Auto-heal success rate | ≥ 90% for common failures |
-| Copilot agent | Interactive migration in VS Code |
+| AppWorks | Entity + form + rule extraction → Power Platform metadata export |
+| LLM fallback accuracy | ≥ 85% for expressions that fail rule-based conversion |
+| Auto-heal success rate | ≥ 90% for common TMDL/PBIR validation failures |
+| Cost per LLM expression | < $0.01 average (GPT-4o mini) |
 | Release | v1.2.0 |
 
 ---
 
-## Phase 10 — Real-Time Sync & Data Lineage (Sprints 55–60) 🔲 PLANNED
+## Phase 10 — Data Lineage & Continuous Sync (Sprints 55–60) 🔲 PLANNED
 
-> **Goal:** Enable continuous synchronization between OpenText and Fabric, with full data lineage graph for regulatory compliance and impact analysis.
+> **Goal:** Full data lineage graph from OpenText source → Fabric target with Purview integration, and continuous polling-based synchronization for live environments.
+>
+> **Timeline:** Q1–Q2 2027 · **Prereqs:** Phase 8 Delta ingestion · **Release:** v1.3.0
 
-### Sprint 55 — Real-Time Change Stream
-
-| Item | Owner | Status | Details |
-|------|-------|--------|---------|
-| CS event subscription | @extractor | 🔲 | Content Server event API → webhook/polling for real-time changes |
-| Documentum event listener | @extractor | 🔲 | DFC event manager → change notification stream |
-| Event queue (in-process) | @orchestrator | 🔲 | In-memory event queue with persistence to JSON checkpoint |
-| Change classification | @orchestrator | 🔲 | Classify events: create/update/delete/move/permission-change |
-
-### Sprint 56 — Continuous Ingestion Pipeline
+### Sprint 55 — Data Lineage Model
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| Streaming Delta merge | @pipeline | 🔲 | Real-time upsert into Lakehouse Delta tables |
-| Binary content sync | @content | 🔲 | Incremental binary download on change events |
-| Permission delta sync | @governance | 🔲 | ACL change events → RLS role updates |
-| Conflict detection + alerting | @orchestrator | 🔲 | Detect conflicting changes, send alerts via webhook/email |
+| Lineage DAG model | @governance | 🔲 | `LineageGraph` class: nodes (source/transform/target), edges (dataflow), metadata per edge |
+| Pipeline instrumentation | @orchestrator | 🔲 | Emit lineage events at each pipeline step: extraction → JSON → generation → deploy |
+| Lineage persistence | @orchestrator | 🔲 | `lineage.json` output with full provenance chain per artifact |
+| Lineage HTML visualizer | @orchestrator | 🔲 | Interactive DAG explorer in migration dashboard (D3.js-based Sankey/tree) |
 
-### Sprint 57 — Data Lineage Graph
-
-| Item | Owner | Status | Details |
-|------|-------|--------|---------|
-| Lineage model (DAG) | @governance | 🔲 | Directed acyclic graph: OT source → JSON intermediate → Fabric artifact |
-| Lineage collector | @orchestrator | 🔲 | Instrument pipeline to emit lineage events at each transformation step |
-| Purview lineage integration | @governance | 🔲 | Push lineage graph to Microsoft Purview Data Catalog |
-| Lineage visualization (HTML) | @orchestrator | 🔲 | Interactive lineage explorer in migration dashboard |
-
-### Sprint 58 — Cross-Platform Traceability
+### Sprint 56 — Purview Lineage Integration
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| Impact analysis | @assessor | 🔲 | "If I change this OT document, what Fabric artifacts are affected?" |
-| Reverse traceability | @assessor | 🔲 | "Where did this Lakehouse row come from?" → trace to OT source |
-| Change propagation engine | @orchestrator | 🔲 | Schema changes in OT → auto-update Delta DDL + TMDL |
-| Data quality monitoring | @assessor | 🔲 | Row count, null %, type mismatch alerts between source and target |
+| Purview REST API client | @governance | 🔲 | `purview-catalog` SDK: create entities, publish lineage, query catalog |
+| Entity type mapping | @governance | 🔲 | OT source types → Purview entity types (Dataset, Pipeline, Report) |
+| Lineage push | @governance | 🔲 | Push lineage graph to Purview after each migration run |
+| Impact analysis queries | @assessor | 🔲 | "What Fabric artifacts depend on OT source X?" via Purview lineage API |
 
-### Sprint 59 — Monitoring & Alerting
+### Sprint 57 — Continuous Polling Sync
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| Sync health dashboard | @orchestrator | 🔲 | Real-time sync status, lag metrics, error rates |
-| PagerDuty/Teams integration | @orchestrator | 🔲 | Alert routing for sync failures, permission drift, data quality issues |
-| SLA enforcement | @orchestrator | 🔲 | Config-driven SLA thresholds (max lag, min quality score) |
-| Capacity forecasting | @assessor | 🔲 | Predict storage/RU growth based on sync patterns |
+| CS polling client | @extractor | 🔲 | Poll Content Server `/api/v2/nodes` with `modified_after` watermark (5-min interval) |
+| Documentum polling client | @extractor | 🔲 | DQL `SELECT * FROM dm_document WHERE r_modify_date > :watermark` |
+| Event classification | @orchestrator | 🔲 | Classify polled changes: create / update / delete / move / permission-change |
+| Sync checkpoint | @orchestrator | 🔲 | Persistent watermark in `sync_state.json`; resume after crash/restart |
+
+### Sprint 58 — Continuous Ingestion Pipeline
+
+| Item | Owner | Status | Details |
+|------|-------|--------|---------|
+| Change → Delta merge | @pipeline | 🔲 | Route classified events to Delta merge (upsert) or soft-delete |
+| Binary content delta sync | @content | 🔲 | Download only changed/new binaries; skip unchanged (checksum match) |
+| Permission delta sync | @governance | 🔲 | ACL change events → update RLS roles + Purview labels incrementally |
+| Conflict alerting | @orchestrator | 🔲 | Webhook/email alert on: concurrent edits, schema drift, permission escalation |
+
+### Sprint 59 — Monitoring & Data Quality
+
+| Item | Owner | Status | Details |
+|------|-------|--------|---------|
+| Sync health dashboard | @orchestrator | 🔲 | HTML dashboard: sync lag, pending queue, error rate, throughput timeline |
+| Data quality checks | @assessor | 🔲 | Post-sync validation: row count drift, null % increase, type mismatch alerts |
+| SLA enforcement | @orchestrator | 🔲 | Config-driven thresholds: max sync lag, min quality score → alert or block deploy |
+| Teams/webhook notifications | @orchestrator | 🔲 | Incoming webhook → Teams channel for sync failures, quality drops, SLA breaches |
 
 ### Sprint 60 — Phase 10 Stabilization
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| Real-time sync tests | @tester | 🔲 | Event-driven sync with simulated OT changes |
-| Lineage accuracy tests | @tester | 🔲 | Verify lineage graph completeness and correctness |
-| Performance under load | @tester | 🔲 | 100 events/sec sustained sync throughput |
-| v1.3.0 release | @orchestrator | 🔲 | Real-time sync + lineage release |
+| Lineage accuracy tests | @tester | 🔲 | Verify 100% artifact coverage in lineage graph (no orphan nodes) |
+| Continuous sync E2E tests | @tester | 🔲 | Simulated OT changes → poll → Delta merge → verify Lakehouse state |
+| Purview integration tests | @tester | 🔲 | Mock Purview API → verify entity/lineage creation |
+| v1.3.0 release | @orchestrator | 🔲 | Lineage + continuous sync release |
 
 ### Phase 10 Success Criteria
 
 | Metric | Target |
 |--------|--------|
 | Tests | 2,000+ |
-| Sync latency | < 5 minutes from OT change to Fabric update |
-| Lineage coverage | 100% of artifacts traced to source |
-| Purview integration | Full lineage graph in Purview |
+| Sync latency | < 10 minutes from OT change to Fabric update (polling-based) |
+| Lineage coverage | 100% of generated artifacts traced to source |
+| Purview | Full lineage graph published to Purview Data Catalog |
+| Data quality | Automated post-sync validation with alerting |
 | Release | v1.3.0 |
 
 ---
 
-## Phase 11 — Marketplace & Ecosystem (Sprints 61–66) 🔲 PLANNED
+## Phase 11 — Copilot Agent & Ecosystem (Sprints 61–66) 🔲 PLANNED
 
-> **Goal:** Build an extensible ecosystem with a plugin marketplace, community-contributed templates, and integration with the broader Microsoft data platform.
+> **Goal:** VS Code Copilot agent for interactive migration, plugin ecosystem for community extensions, and advanced Fabric deployment features.
+>
+> **Timeline:** Q2–Q3 2027 · **Prereqs:** Phase 9 AI integration · **Release:** v2.0.0
 
-### Sprint 61 — Plugin Marketplace Foundation
-
-| Item | Owner | Status | Details |
-|------|-------|--------|---------|
-| Plugin registry service | @orchestrator | 🔲 | Versioned plugin catalog (JSON manifest, semantic versioning) |
-| Plugin discovery CLI | @orchestrator | 🔲 | `migrate --list-plugins`, `migrate --install-plugin <name>` |
-| Plugin sandboxing | @governance | 🔲 | Plugin execution in restricted context (no file system access outside output) |
-| Plugin certification | @governance | 🔲 | Automated security scan + test suite for community plugins |
-
-### Sprint 62 — Community Templates
+### Sprint 61 — VS Code Copilot Agent
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| Industry model templates | @semantic | 🔲 | Pre-built TMDL models for Healthcare, Finance, Retail, Manufacturing, Legal |
-| DAX recipe marketplace | @semantic | 🔲 | Shareable DAX recipe packs with versioning |
-| Visual mapping packs | @report | 🔲 | Custom BIRT visual → PBI visual mapping packs for specific industries |
-| Migration playbook templates | @assessor | 🔲 | Pre-built assessment templates with industry-specific criteria |
+| `@opentext-migrate` agent definition | @orchestrator | 🔲 | `.github/agents/opentext-migrate.agent.md` with tool permissions and instructions |
+| Natural language migration | @orchestrator | 🔲 | "Migrate sales reports from C:\reports" → parse intent → call `migrate.py` |
+| Migration status Q&A | @orchestrator | 🔲 | "What failed?" / "Show expression gaps" → query progress + report JSON |
+| Copilot DAX review | @report | 🔲 | Agent reviews generated DAX measures and suggests optimizations |
+| Interactive fix workflow | @orchestrator | 🔲 | Agent detects validation warnings → proposes fixes → user approves → applies |
 
-### Sprint 63 — Power Platform Integration
-
-| Item | Owner | Status | Details |
-|------|-------|--------|---------|
-| Power Apps connector | @pipeline | 🔲 | Custom connector for triggering migrations from Power Apps |
-| Power Automate flow | @pipeline | 🔲 | Migration-as-a-flow: trigger on OT event → migrate → deploy → notify |
-| Dataverse integration | @pipeline | 🔲 | Migration metadata in Dataverse for Power Apps dashboard |
-| Teams notification bot | @deployer | 🔲 | Migration status notifications in Microsoft Teams channels |
-
-### Sprint 64 — Advanced Fabric Integration
+### Sprint 62 — Plugin Foundation
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| Fabric Git integration | @deployer | 🔲 | Deploy via Fabric Git workspace (commit → auto-deploy) |
-| Deployment pipelines | @deployer | 🔲 | Fabric deployment pipelines (Dev → Test → Prod) |
-| Capacity management | @deployer | 🔲 | Auto-scale Fabric capacity during large migrations |
-| Lakehouse optimization | @pipeline | 🔲 | V-Order optimization, Z-Order for query performance |
+| Plugin manifest schema | @orchestrator | 🔲 | `plugin.json`: name, version, hooks (pre-extract, post-convert, pre-deploy), entry point |
+| Plugin loader | @orchestrator | 🔲 | Discover + load plugins from `plugins/` directory; validate manifest |
+| Plugin hook system | @orchestrator | 🔲 | Extend existing `PluginManager` in `plugins.py` to support full lifecycle hooks |
+| Plugin sandboxing | @governance | 🔲 | Restrict plugin I/O to output directory; no network access unless declared |
+| Plugin test framework | @tester | 🔲 | `PluginTestHarness` for plugin authors to validate their hooks |
 
-### Sprint 65 — Cross-Migration Platform
+### Sprint 63 — Community Templates & Recipes
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| SharePoint migration module | @extractor | 🔲 | SharePoint Online document libraries → Lakehouse |
-| Box/Dropbox connector | @extractor | 🔲 | Cloud storage → OneLake migration |
-| Google Workspace connector | @extractor | 🔲 | Google Drive docs → OneLake migration |
-| Universal migration orchestrator | @orchestrator | 🔲 | Single CLI for any source → Fabric migration |
+| Industry model templates | @semantic | 🔲 | Pre-built TMDL models: Healthcare (HL7/FHIR), Finance (GL/AP/AR), Legal (case management) |
+| DAX recipe packs | @semantic | 🔲 | Versioned recipe bundles: `healthcare-kpis-v1.0.json`, `finance-kpis-v1.0.json` |
+| Visual mapping packs | @report | 🔲 | Industry-specific BIRT visual → PBI visual overrides (e.g., clinical charts → healthcare visuals) |
+| Template CLI | @orchestrator | 🔲 | `migrate --template healthcare` → apply industry model + recipes + visual mappings |
+
+### Sprint 64 — Advanced Fabric Deployment
+
+| Item | Owner | Status | Details |
+|------|-------|--------|---------|
+| Fabric Git integration | @deployer | 🔲 | Deploy via Fabric Git workspace: generate → commit → Fabric auto-syncs |
+| Deployment pipelines | @deployer | 🔲 | Fabric deployment pipeline support: Dev → Test → Prod with environment-specific config |
+| Capacity management | @deployer | 🔲 | Check capacity utilization before deploy; queue if capacity is saturated |
+| Lakehouse optimization | @pipeline | 🔲 | Post-deploy: V-Order optimization, partition pruning hints, Z-Order for large tables |
+| Docker packaging | @orchestrator | 🔲 | `Dockerfile` + `docker-compose.yml` for containerized migration runs |
+
+### Sprint 65 — Cross-Source Connectors
+
+| Item | Owner | Status | Details |
+|------|-------|--------|---------|
+| SharePoint connector | @extractor | 🔲 | SharePoint Online Graph API → document libraries + metadata → Lakehouse |
+| Box connector | @extractor | 🔲 | Box Content API → folders + files + metadata → OneLake |
+| Source connector interface | @orchestrator | 🔲 | Abstract `SourceConnector` base class: `authenticate()`, `discover()`, `extract()` |
+| Connector plugin packaging | @orchestrator | 🔲 | Each connector as an installable plugin following Sprint 62 manifest schema |
 
 ### Sprint 66 — Phase 11 Stabilization & v2.0
 
 | Item | Owner | Status | Details |
 |------|-------|--------|---------|
-| Plugin marketplace tests | @tester | 🔲 | Plugin install, uninstall, version upgrade tests |
-| Cross-platform E2E tests | @tester | 🔲 | Multi-source migration (OT + SharePoint + Box → Fabric) |
-| Community documentation | @orchestrator | 🔲 | Plugin development guide, template contribution guide |
-| v2.0.0 release | @orchestrator | 🔲 | Full ecosystem release with marketplace |
+| Copilot agent E2E tests | @tester | 🔲 | 5 interactive migration scenarios via agent |
+| Plugin lifecycle tests | @tester | 🔲 | Plugin install, load, execute hooks, uninstall, version upgrade |
+| Cross-source E2E tests | @tester | 🔲 | OT + SharePoint + Box → unified Lakehouse (mock APIs) |
+| v2.0.0 release | @orchestrator | 🔲 | Ecosystem release: Copilot agent + plugins + cross-source connectors |
 
 ### Phase 11 Success Criteria
 
 | Metric | Target |
 |--------|--------|
 | Tests | 2,500+ |
-| Plugins | 10+ certified plugins in marketplace |
-| Templates | 5+ industry model templates |
-| Source systems | 6+ (OT CS, DCTM, BIRT, SharePoint, Box, Google) |
+| Copilot agent | Interactive migration, status Q&A, DAX review in VS Code |
+| Plugins | Plugin manifest + loader + sandbox + 3 example plugins |
+| Templates | 3 industry model templates + recipe packs |
+| Source connectors | OT CS + DCTM + BIRT + SharePoint + Box (5 sources) |
+| Fabric deployment | Git integration + deployment pipelines + Docker |
 | Release | v2.0.0 |
 
 ---
 
-## Current State (v0.6.0) — What's Built
+## Current State (v0.7.0) — What's Built
 
 | Component | Status | Details |
-|-----------|--------|---------|
-| **Source modules** | 51 | Extraction, conversion, governance, deployment, reporting, telemetry |
-| **Tests** | 816 | Across 44 test files |
+|-----------|--------|--------|
+| **Source modules** | 53 | Extraction, conversion, governance, deployment, reporting, telemetry |
+| **Tests** | 878 | Across 45 test files |
 | **BIRT parser** | ✅ Working | Namespace-aware XML extraction (columns, queries, computed columns) |
 | **Expression converter** | 80+ functions | BIRT JS → DAX (aggregation, math, string, date, conditional) |
-| **Visual mapper** | 140+ types | BIRT → PBI (table, chart, crosstab, 3D, combo, sankey, sparkline, treemap, …) |
-| **PBIP generator** | ✅ PBIR v4.0 | Folder structure, .platform, $schema, visual configs, bookmarks |
+| **Visual mapper** | 140+ types | BIRT → PBI (table, chart, crosstab, 3D, combo, sankey, sparkline, treemap, …) + alias resolution |
+| **PBIP generator** | ✅ PBIR v4.0 | Folder structure, .platform, $schema, visual configs, bookmarks, sanitized field refs |
 | **TMDL generator** | ✅ Working | Tables, columns, measures, relationships, hierarchies, calc groups, RLS |
-| **M query generator** | 40+ connectors | Oracle, PostgreSQL, Snowflake, BigQuery, MongoDB, SAP HANA, Databricks, … |
+| **M query generator** | 40+ connectors | Oracle, PostgreSQL, Snowflake, BigQuery, MongoDB, SAP HANA, Databricks, … + BIRT computed columns as `Table.AddColumn` |
 | **DAX optimizer** | ✅ Working | IF→SWITCH, ISBLANK→COALESCE, time intelligence auto-injection |
 | **DAX recipes** | ✅ Working | Industry KPI templates (Healthcare, Finance, Retail, Manufacturing) |
 | **Lakehouse generator** | ✅ Working | Delta table DDL from extracted metadata |
@@ -869,6 +926,7 @@ See [AGENTS.md](AGENTS.md) for full architecture, data flow, and handoff protoco
 | **Governance** | ✅ Working | ACL → RLS, classification → Purview, audit trail, security validation |
 | **HTML dashboard** | ✅ Working | 8-section migration report with dark mode |
 | **Assessment** | ✅ Working | Scanner, complexity, readiness report, validator, strategy advisor |
+| **Artifact healer** | ✅ Working | 23 self-healing methods: DAX syntax (6), TMDL structure (7), M queries (4), PBIR visuals (6) |
 | **Deployment** | ✅ Working | Auth, Fabric client, deployer, OneLake, multi-tenant, refresh/gateway |
 | **Telemetry** | ✅ Working | Event tracking, Prometheus + Azure Monitor export, HTML dashboard |
 | **Regression** | ✅ Working | Snapshot drift detection, visual diff, comparison reports |
@@ -885,20 +943,21 @@ See [AGENTS.md](AGENTS.md) for full architecture, data flow, and handoff protoco
 
 ## Roadmap Summary
 
-| Phase | Sprints | Focus | Key Deliverables | Status |
-|-------|---------|-------|-----------------|--------|
-| **Phase 0** | 1–4 | Foundation | OT API client, metadata extraction, CI | ✅ Done |
-| **Phase 1** | 5–8 | Fabric Generation | Lakehouse, Data Factory, PySpark, governance | ✅ Done |
-| **Phase 2** | 9–14 | BIRT → Power BI | Report parser, DAX conversion, .pbip output | ✅ Done |
-| **Phase 3** | 15–18 | Documentum | Documentum API, content migration, ACL mapping | ✅ Done |
-| **Phase 4** | 19–24 | Assessment & Deploy | Assessment engine, deploy client, batch, security | ✅ Done |
-| **Phase 5** | 25–30 | Report Fidelity | Conditional formatting, drill-through, iHub, 140+ visuals | ✅ Done |
-| **Phase 6** | 31–36 | Enterprise Hardening | Telemetry, regression, multi-tenant, 816 tests | ✅ Done |
-| **Phase 7** | 37–42 | Performance & Docs | Performance optimization, enterprise docs, v1.0 release | 🔲 Next |
-| **Phase 8** | 43–48 | AppWorks & Extended ECM | Low-code app migration, SAP/Salesforce integrations | 🔲 Planned |
-| **Phase 9** | 49–54 | AI-Powered Migration | LLM expression conversion, auto-healing, smart recommendations | 🔲 Planned |
-| **Phase 10** | 55–60 | Real-Time & Lineage | Live sync, data lineage graph, cross-platform traceability | 🔲 Planned |
-| **Phase 11** | 61–66 | Marketplace & Ecosystem | Plugin marketplace, community templates, Copilot integration | 🔲 Planned |
+| Phase | Sprints | Timeline | Focus | Key Deliverables | Status |
+|-------|---------|----------|-------|-----------------|--------|
+| **Phase 0** | 1–4 | Q4 2025 | Foundation | OT API client, metadata extraction, CI | ✅ Done |
+| **Phase 1** | 5–8 | Q4 2025 | Fabric Generation | Lakehouse, Data Factory, PySpark, governance | ✅ Done |
+| **Phase 2** | 9–14 | Q1 2026 | BIRT → Power BI | Report parser, DAX conversion, .pbip output | ✅ Done |
+| **Phase 3** | 15–18 | Q1 2026 | Documentum | Documentum API, content migration, ACL mapping | ✅ Done |
+| **Phase 4** | 19–24 | Q1 2026 | Assessment & Deploy | Assessment engine, deploy client, batch, security | ✅ Done |
+| **Phase 5** | 25–30 | Q2 2026 | Report Fidelity | Conditional formatting, drill-through, iHub, 140+ visuals | ✅ Done |
+| **Phase 6** | 31–36 | Q2 2026 | Enterprise Hardening | Telemetry, regression, multi-tenant, 816 tests | ✅ Done |
+| **Phase 6.5** | 36.5 | Apr 2026 | BIRT Fidelity Hardening | Computed cols → M, alias resolution, healer (23 methods), 878 tests | ✅ Done |
+| **Phase 7** | 37–42 | Q2–Q3 2026 | Perf & v1.0 GA | 150+ expressions, perf optimization, docs, security, v1.0 | 🔲 Next |
+| **Phase 8** | 43–48 | Q3–Q4 2026 | Workflow & ExtECM | OT workflows → Power Automate, SAP/SFDC, Delta ingestion | 🔲 Planned |
+| **Phase 9** | 49–54 | Q4 2026–Q1 2027 | AppWorks & AI | AppWorks → Power Platform, LLM expression fallback, auto-heal | 🔲 Planned |
+| **Phase 10** | 55–60 | Q1–Q2 2027 | Lineage & Sync | Data lineage → Purview, continuous polling sync, data quality | 🔲 Planned |
+| **Phase 11** | 61–66 | Q2–Q3 2027 | Copilot & Ecosystem | VS Code agent, plugin system, templates, cross-source, v2.0 | 🔲 Planned |
 
 ---
 

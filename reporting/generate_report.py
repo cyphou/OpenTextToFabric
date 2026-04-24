@@ -149,7 +149,7 @@ def _build_report(out: Path) -> MigrationReport:
         else:
             status = SKIPPED
         report.add(
-            name=e.get("column_name", e.get("expression", "")[:60]),
+            name=e.get("column_name") or e.get("expression", "")[:60],
             category="expressions",
             status=status,
             details=e.get("dax", ""),

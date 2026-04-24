@@ -163,19 +163,18 @@ def main() -> int:
         if args.source_type in ("documentum", "all"):
             _run_documentum(args, output_dir, progress)
         if args.source_type in ("birt", "all"):
-            _run_birt(args, output_dir, progress)
+            _run_birt_pipeline(args, output_dir, progress)
 
-        # Generate Fabric artifacts
-        if args.output_format in ("fabric", "both"):
+        # Generate Fabric artifacts (non-BIRT sources only; BIRT is handled
+        # inside _run_birt_pipeline per-report)
+        if args.output_format in ("fabric", "both") and args.source_type not in ("birt",):
             _generate_fabric(output_dir, progress)
-        if args.output_format in ("pbip", "both") and args.source_type in ("birt", "all"):
-            _generate_pbip(output_dir, progress)
 
         from pathlib import Path
         checkpoint = str(Path(output_dir) / "progress_checkpoint.json")
         progress.save_checkpoint(checkpoint)
 
-        # Generate HTML migration report
+        # Generate consolidated HTML migration report
         if not args.no_report:
             from reporting.generate_report import generate_report
             report_path = generate_report(output_dir=output_dir)
@@ -239,29 +238,69 @@ def _run_documentum(args: argparse.Namespace, output_dir: str, progress: "Migrat
     step.complete()
 
 
-def _run_birt(args: argparse.Namespace, output_dir: str, progress: "MigrationProgress") -> None:
-    """Run BIRT report extraction pipeline."""
+def _run_birt_pipeline(args: argparse.Namespace, output_dir: str, progress: "MigrationProgress") -> None:
+    """Run full BIRT pipeline: extract → generate per report, each in its own subfolder.
+
+    For a directory input, each .rptdesign gets:
+      <output_dir>/<ReportStem>/          — intermediate JSONs
+      <output_dir>/<ReportStem>/<Stem>/   — .pbip project
+      <output_dir>/<ReportStem>/MIGRATION_REPORT.html
+    For a single file input the report folder is created under output_dir.
+    """
     from pathlib import Path
     from opentext_extract.birt_parser import BIRTParser
 
-    step = progress.add_step("birt_extraction")
-    step.start()
-
     input_path = Path(args.input) if args.input else None
     if not input_path or not input_path.exists():
+        step = progress.add_step("birt_extraction")
+        step.start()
         logger.warning("No BIRT input path specified or path not found")
         step.fail("No BIRT input path")
         return
 
+    # Collect report files
     if input_path.is_file():
-        parser = BIRTParser(input_path)
-        parser.export_json(output_dir)
-    elif input_path.is_dir():
-        for rpt in input_path.glob("*.rptdesign"):
-            parser = BIRTParser(rpt)
-            parser.export_json(output_dir)
+        report_files = [input_path]
+    else:
+        report_files = sorted(input_path.glob("*.rptdesign"))
 
-    step.complete()
+    if not report_files:
+        logger.warning("No .rptdesign files found in %s", input_path)
+        return
+
+    out_root = Path(output_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    for rpt_path in report_files:
+        report_stem = rpt_path.stem  # e.g. "Bilan Ensablement"
+        report_dir = out_root / report_stem
+        report_dir.mkdir(parents=True, exist_ok=True)
+
+        # ── Extract ──
+        step_ext = progress.add_step(f"birt_extraction:{report_stem}")
+        step_ext.start()
+        parser = BIRTParser(rpt_path)
+        parser.export_json(str(report_dir))
+        step_ext.complete()
+
+        # ── Generate Fabric artifacts ──
+        if args.output_format in ("fabric", "both"):
+            _generate_fabric(str(report_dir), progress)
+
+        # ── Generate PBIP ──
+        if args.output_format in ("pbip", "both"):
+            _generate_pbip(
+                str(report_dir),
+                progress,
+                report_name=report_stem,
+                project_dir=str(report_dir),
+            )
+
+        # ── Per-report HTML ──
+        if not args.no_report:
+            from reporting.generate_report import generate_report
+            rpt_html = generate_report(output_dir=str(report_dir))
+            logger.info("Report '%s' → %s", report_stem, rpt_html)
 
 
 def _generate_fabric(output_dir: str, progress: "MigrationProgress") -> None:
@@ -324,6 +363,18 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress", report_name: 
     # Convert expressions → DAX measures
     expr_conv = ExpressionConverter()
     converted = expr_conv.convert_batch(expressions)
+
+    # Write conversion results back to expressions.json so the HTML report
+    # can display status and DAX output (not just the raw JS expressions).
+    enriched = []
+    for orig, conv in zip(expressions, converted):
+        entry = dict(orig)
+        entry["status"] = conv.get("status", "")
+        entry["dax"] = conv.get("converted", "")
+        entry["column_name"] = conv.get("column_name", orig.get("column_name", ""))
+        enriched.append(entry)
+    with open(out / "expressions.json", "w", encoding="utf-8") as f:
+        json.dump(enriched, f, indent=2, default=str)
 
     # Build semantic model (TMDL) inside the project folder
     tmdl = TMDLGenerator(model_name=report_name)
@@ -400,11 +451,19 @@ def _generate_pbip(output_dir: str, progress: "MigrationProgress", report_name: 
 
         tmdl.add_measure(table, name, dax)
 
+    # Generate M queries from data sources and wire into TMDL partitions
+    mq = MQueryGenerator()
+    m_results = mq.generate_from_datasets(datasets, connections)
+    tmdl.set_partition_m_queries(m_results)
+
     tmdl.export(str(pbip_dir))
 
-    # Generate M queries
-    mq = MQueryGenerator()
-    mq.generate_from_datasets(datasets, connections)
+    # ── Self-heal: fix DAX, TMDL, M, and PBIR issues ──
+    from assessment.artifact_healer import ArtifactHealer
+    healer = ArtifactHealer()
+    recovery = healer.heal_project(pbip_dir)
+    if recovery.entries:
+        recovery.save(str(proj_out))
 
     # Map visuals
     vm = VisualMapper()

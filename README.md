@@ -18,7 +18,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12%2B-3776ab?logo=python&logoColor=white" alt="Python 3.12+"/>
   <img src="https://img.shields.io/badge/dependencies-zero-brightgreen" alt="Zero Dependencies"/>
-  <img src="https://img.shields.io/badge/tests-816%20passed-107c10?logo=pytest&logoColor=white" alt="Tests"/>
+  <img src="https://img.shields.io/badge/tests-878%20passed-107c10?logo=pytest&logoColor=white" alt="Tests"/>
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"/>
   <img src="https://img.shields.io/badge/agents-10-8764b8" alt="10 Agents"/>
   <img src="https://img.shields.io/badge/visual%20types-140%2B-e97627" alt="140+ Visuals"/>
@@ -33,8 +33,8 @@
 
 | Capability | Details |
 |:---|:---|
-| **51 source modules** | Extraction, conversion, governance, deployment, reporting, telemetry |
-| **816 tests** | Comprehensive coverage across 44 test files |
+| **53 source modules** | Extraction, conversion, governance, deployment, reporting, telemetry |
+| **878 tests** | Comprehensive coverage across 45 test files |
 | **Zero dependencies** | Pure Python stdlib — no pip install needed for core |
 | **10-agent architecture** | Specialized agents for each migration concern |
 | **140+ visual types** | BIRT visuals → PBI visual mappings (3D, combo, sankey, sparkline, …) |
@@ -141,7 +141,7 @@ python migrate.py \
 | **.pbip Project** | PBIR v4.0 report definition with bookmarks |
 | **DAX Measures** | 80+ BIRT JavaScript → DAX conversions + DAX optimizer |
 | **Power Query M** | 40+ connectors (Oracle, PostgreSQL, Snowflake, BigQuery, MongoDB, …) |
-| **Visual Mappings** | 140+ BIRT visual → PBI visual type mappings |
+| **Visual Mappings** | 140+ BIRT visual → PBI visual type mappings + alias resolution |
 | **TMDL Hierarchies** | Auto-inferred date/geography hierarchies, calculation groups, RLS roles |
 | **DAX Recipes** | Industry-specific KPI templates (Healthcare, Finance, Retail, Manufacturing) |
 
@@ -167,6 +167,7 @@ python migrate.py \
 | **Regression Suite** | Snapshot-based drift detection, visual diff, comparison reports |
 | **Change Detection** | File-hash + mtime incremental sync engine |
 | **Recovery Report** | Self-healing failure tracking with retry recommendations |
+| **Artifact Healer** | 23 self-healing methods (DAX, TMDL, M queries, PBIR visuals) |
 | **SLA Tracker** | Per-report duration and fidelity compliance monitoring |
 | **Plugin System** | Extensible visual mapping and DAX post-processing hooks |
 
@@ -217,8 +218,8 @@ OpenTextToFabric/
 │
 ├── report_converter/           # ── BIRT → Power BI Conversion ──────────
 │   ├── expression_converter.py #    80+ BIRT JS → DAX mappings
-│   ├── visual_mapper.py        #    140+ BIRT visuals → PBI visual configs
-│   ├── pbip_generator.py       #    .pbip PBIR v4.0 project output + bookmarks
+│   ├── visual_mapper.py        #    140+ BIRT visuals → PBI visual configs + alias resolution
+│   ├── pbip_generator.py       #    .pbip PBIR v4.0 project output + bookmarks + sanitized field refs
 │   ├── conditional_format.py   #    BIRT highlight rules → PBI formatting
 │   ├── drill_through.py        #    Drill-through page generation
 │   ├── multi_datasource.py     #    Multi-source composite model builder
@@ -232,7 +233,7 @@ OpenTextToFabric/
 │   ├── notebook_generator.py   #    PySpark notebook generation
 │   ├── dataflow_generator.py   #    Dataflow Gen2 (Power Query M)
 │   ├── tmdl_generator.py       #    TMDL semantic model + hierarchies + calc groups + RLS
-│   ├── m_query_generator.py    #    40+ Power Query M connectors
+│   └── m_query_generator.py    #    40+ Power Query M connectors + BIRT computed columns
 │   └── dax_recipes.py          #    Industry-specific KPI measure templates
 │
 ├── governance/                 # ── Permission & Compliance ─────────────
@@ -255,6 +256,7 @@ OpenTextToFabric/
 │   ├── complexity.py           #    Complexity scoring
 │   ├── readiness_report.py     #    HTML readiness dashboard
 │   ├── validator.py            #    Post-migration validation
+│   ├── artifact_healer.py      #    23-method self-healing (DAX, TMDL, M, PBIR)
 │   └── strategy_advisor.py     #    Migration strategy recommendation
 │
 ├── deploy/                     # ── Fabric Deployment ───────────────────
@@ -265,7 +267,7 @@ OpenTextToFabric/
 │   ├── multi_tenant.py         #    Template-based multi-tenant deployment + bundle
 │   └── refresh_gateway.py      #    BIRT/cron schedule → PBI refresh + gateway mapping
 │
-├── tests/                      # 816 tests across 44 test files
+├── tests/                      # 878 tests across 45 test files
 ├── docs/                       # Architecture, agents, dev plan
 │   ├── assets/                 #    Logo + architecture SVG
 │   ├── ARCHITECTURE.md

@@ -87,20 +87,56 @@ class BIRTParser:
                 "id": ds.get("id", ""),
             }
 
-            # ODA data source properties
+            # extensionID is an XML attribute on <oda-data-source>,
+            # not a child <property> element.
+            ext_id = ds.get("extensionID", "")
+            if ext_id:
+                source["extension_id"] = ext_id
+
+            # Library reference — the actual connection properties are
+            # defined in an external .rptlibrary file.
+            extends = ds.get("extends", "")
+            if extends:
+                source["extends"] = extends
+
+            # ODA data source properties (JDBC + flat-file + XML + generic ODA)
+            _ODA_PROPS = {
+                # JDBC / ODA core
+                "odaDriverClass", "odaURL", "odaUser", "odaDataSource",
+                "odaPassword", "odaAutoCommit", "odaIsolationMode",
+                "driverClass", "url", "user",
+                # Flat-file ODA
+                "URI", "DELIMTYPE", "CHARSET", "INCLCOLUMNNAME",
+                "INCLTYPELINE", "TRAILNULLCOLS", "HOME_FOLDER",
+                # XML ODA
+                "FILELIST", "SCHEMA_FILELIST", "XML_FILE",
+                "MAX_ROW", "XML_ENCODING",
+                # Web-service ODA
+                "wsdlURI", "soapEndPoint", "operationTrace",
+                "soapAction", "connectionTimeout",
+                # Excel ODA
+                "xlsURI", "xlsSheetName",
+                # MongoDB ODA
+                "mongoDbUri", "databaseName", "collectionName",
+                "serverHost", "serverPort",
+                # REST / HTTP
+                "baseURI", "httpMethod", "contentType",
+                "requestTimeout", "responseType",
+                # Scripted data source
+                "openScript", "fetchScript", "closeScript",
+                # Generic
+                "extensionID",
+            }
             for prop in ds.findall(".//property"):
                 prop_name = prop.get("name", "")
                 prop_value = prop.text or ""
-                if prop_name in ("odaDriverClass", "odaURL", "odaUser", "odaDataSource"):
-                    source[prop_name] = prop_value
-                elif prop_name == "extensionID":
-                    source["extension_id"] = prop_value
-
-            # JDBC-specific
-            for prop in ds.findall(".//property"):
-                name = prop.get("name", "")
-                if name in ("driverClass", "url", "user"):
-                    source[name] = prop.text or ""
+                if prop_name in _ODA_PROPS:
+                    # Normalise extensionID from <property> child to
+                    # the same key used for the XML attribute.
+                    if prop_name == "extensionID":
+                        source.setdefault("extension_id", prop_value)
+                    else:
+                        source[prop_name] = prop_value
 
             sources.append(source)
 

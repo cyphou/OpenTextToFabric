@@ -304,9 +304,12 @@ FUNCTION_MAP: list[tuple[str, str, bool]] = [
     (r"isFinite\(([^)]+)\)", r"ISNUMBER(\1)", True),
     (r"encodeURIComponent\(([^)]+)\)", r"/* URI encoding N/A in DAX */ \1", True),
 
-    # Null / undefined handling
-    (r"null", "BLANK()", False),
-    (r"undefined", "BLANK()", False),
+    # Null / undefined handling (word-boundary to avoid corrupting other words)
+    (r"\bnull\b", "BLANK()", True),
+    (r"\bundefined\b", "BLANK()", True),
+
+    # new Date() → NOW()
+    (r"\bnew\s+Date\(\)", "NOW()", True),
 ]
 
 # JavaScript operator → DAX operator
@@ -324,6 +327,20 @@ OPERATOR_MAP: list[tuple[str, str]] = [
 class ExpressionConverter:
     """Converts BIRT JavaScript expressions to DAX."""
 
+    # Patterns that indicate a dataset event handler (beforeOpen, onFetch, etc.)
+    # These manipulate SQL queries at runtime — not convertible to DAX measures.
+    _EVENT_HANDLER_MARKERS = (
+        "this.queryText", "dataSet.queryText", "queryText.replace",
+        "reportContext.getOutputFormat", "reportContext.getRenderOption",
+        "importPackage", "Packages.", "java.",
+    )
+
+    # Patterns that indicate a full function/script block (initialize, etc.)
+    _SCRIPT_BLOCK_MARKERS = (
+        "function ", "function(", "for (", "for(", "while (", "while(",
+        ".prototype", "new XMLHttpRequest", "importPackage",
+    )
+
     def __init__(self):
         self._compiled_patterns: list[tuple[re.Pattern, str]] = []
         for pattern, replacement, is_regex in FUNCTION_MAP:
@@ -333,6 +350,20 @@ class ExpressionConverter:
 
     def convert(self, expression: str, context: str = "") -> dict[str, Any]:
         """Convert a single BIRT expression to DAX.
+
+        Handles the full range of BIRT JavaScript patterns:
+          - BIRT API functions (Total.*, BirtStr.*, BirtDateTime.*, BirtMath.*)
+          - JavaScript Math/String/parseInt/parseFloat
+          - row["col"], dataSetRow["col"], params["p"].value references
+          - Ternary (including nested): ``cond ? a : b``
+          - Multi-line if / else-if / else chains (with braces or without)
+          - Multi-statement blocks (var + return)
+          - String concatenation with ``+`` → ``&``
+          - new Date() → NOW()
+          - null / undefined → BLANK()
+          - switch statements → SWITCH()
+          - Dataset event handlers → classified as ``event_handler``
+          - Script blocks (function declarations, loops) → classified as ``script_block``
 
         Args:
             expression: BIRT JavaScript expression string.
@@ -355,52 +386,386 @@ class ExpressionConverter:
 
         converted = expression.strip()
 
-        # Apply function mappings
+        # ── Phase 0: Classify event handlers and script blocks ──
+        if any(marker in converted for marker in self._EVENT_HANDLER_MARKERS):
+            result["converted"] = converted
+            result["status"] = "event_handler"
+            result["warnings"].append(
+                "Dataset event handler — affects SQL at runtime, not a DAX measure"
+            )
+            self.conversion_log.append(result)
+            return result
+
+        if any(marker in converted for marker in self._SCRIPT_BLOCK_MARKERS):
+            # Try to extract the return value from simple function bodies
+            extracted = self._extract_return_value(converted)
+            if extracted is not None:
+                converted = extracted
+                result["warnings"].append(
+                    "Extracted return value from script block"
+                )
+            else:
+                result["converted"] = converted
+                result["status"] = "script_block"
+                result["warnings"].append(
+                    "Script block (function/loop) — cannot map to a single DAX expression"
+                )
+                self.conversion_log.append(result)
+                return result
+
+        # ── Phase 1: Apply BIRT/JS function regex mappings ──
         for pattern, replacement in self._compiled_patterns:
             converted = pattern.sub(replacement, converted)
 
-        # Apply operator mappings
+        # ── Phase 2: Apply operator mappings ──
         for js_op, dax_op in OPERATOR_MAP:
             converted = converted.replace(js_op, dax_op)
 
-        # Handle row[] field references → column references
+        # ── Phase 3: Row / dataSetRow / params references ──
         converted = re.sub(r'row\["([^"]+)"\]', r"[\1]", converted)
         converted = re.sub(r"row\['([^']+)'\]", r"[\1]", converted)
         converted = re.sub(r"row\.(\w+)", r"[\1]", converted)
-
-        # Handle dataSetRow references
         converted = re.sub(r'dataSetRow\["([^"]+)"\]', r"[\1]", converted)
-
-        # Handle params references → slicer/filter placeholders
+        converted = re.sub(r"dataSetRow\['([^']+)'\]", r"[\1]", converted)
         converted = re.sub(r'params\["([^"]+)"\]\.value', r"[@\1]", converted)
+        converted = re.sub(r"params\['([^']+)'\]\.value", r"[@\1]", converted)
+        converted = re.sub(r'params\["([^"]+)"\]\.displayText', r"SELECTEDVALUE([@\1])", converted)
 
-        # Handle JavaScript ternary → IF
-        ternary_match = re.match(r"(.+?)\s*\?\s*(.+?)\s*:\s*(.+)", converted)
-        if ternary_match:
-            condition = ternary_match.group(1).strip()
-            true_val = ternary_match.group(2).strip()
-            false_val = ternary_match.group(3).strip()
-            converted = f"IF({condition}, {true_val}, {false_val})"
+        # ── Phase 4: Multi-line if / else-if / else → nested IF() ──
+        converted = self._convert_if_else_chain(converted)
 
-        # Handle JavaScript if/else → IF (simple cases)
-        if_match = re.match(r"if\s*\((.+?)\)\s*\{?\s*(.+?)\s*\}?\s*else\s*\{?\s*(.+?)\s*\}?$", converted, re.DOTALL)
-        if if_match:
-            converted = f"IF({if_match.group(1).strip()}, {if_match.group(2).strip()}, {if_match.group(3).strip()})"
+        # ── Phase 5: switch → SWITCH ──
+        converted = self._convert_switch(converted)
 
-        # Detect unconverted BIRT-specific patterns
+        # ── Phase 6: Ternary → IF (handles nesting) ──
+        converted = self._convert_ternary(converted)
+
+        # ── Phase 7: Multi-statement var/return blocks ──
+        converted = self._convert_var_return(converted)
+
+        # ── Phase 8: String concatenation + → & ──
+        converted = self._convert_string_concat(converted)
+
+        # ── Phase 9: Cleanup ──
+        # Remove trailing semicolons (JS artefact)
+        converted = re.sub(r";\s*$", "", converted.strip())
+        # Remove redundant braces left over from block conversion
+        converted = re.sub(r"^\{\s*", "", converted)
+        converted = re.sub(r"\s*\}$", "", converted)
+        # Collapse excessive whitespace
+        converted = re.sub(r"[ \t]+", " ", converted)
+        converted = converted.strip()
+
+        # ── Phase 10: Final status classification ──
         if any(marker in converted for marker in ("Total.", "BirtStr.", "BirtDateTime.", "BirtMath.", "BirtComp.")):
             result["warnings"].append("Contains unconverted BIRT functions")
             result["status"] = "partial"
 
-        # Detect JavaScript-only constructs
-        if any(kw in converted for kw in ("var ", "function ", "new ", ".prototype", "this.")):
-            result["warnings"].append("Contains JavaScript constructs not convertible to DAX")
-            result["status"] = "unsupported"
+        if re.search(r"\bvar\s+\w", converted) or re.search(r"\bfunction\s*[\w(]", converted):
+            result["warnings"].append("Contains residual JavaScript constructs")
+            result["status"] = "partial"
 
         result["converted"] = converted
 
         self.conversion_log.append(result)
         return result
+
+    # ── JavaScript construct converters ──────────────────────────
+
+    def _convert_if_else_chain(self, expr: str) -> str:
+        """Convert multi-line if / else-if / else chains to nested IF().
+
+        Handles patterns like:
+            if (cond1) { val1 }
+            else if (cond2) { val2 }
+            else { val3 }
+        → IF(cond1, val1, IF(cond2, val2, val3))
+
+        Also handles brace-free single-line bodies.
+        """
+        # Normalise: collapse newlines to spaces for regex matching, but
+        # preserve them for readability if the result is short.
+        s = re.sub(r"\s*\n\s*", " ", expr).strip()
+
+        # Quick check — does this even contain an if?
+        if not re.search(r"\bif\s*\(", s):
+            return expr
+
+        # Iteratively extract if/else-if/else branches.
+        # Pattern: if (<cond>) { <body> } [else if (<cond>) { <body> }]* [else { <body> }]
+        branches: list[tuple[str, str]] = []  # (condition, body) — else has condition=""
+        remaining = s
+
+        while True:
+            # Match "if (condition) { body }" or "if (condition) body"
+            m = re.match(
+                r"\bif\s*\((.+?)\)\s*\{(.+?)\}\s*(.*)",
+                remaining,
+                re.DOTALL,
+            )
+            if not m:
+                # Try without braces: "if (condition) single-expression else ..."
+                m = re.match(
+                    r"\bif\s*\((.+?)\)\s+(.+?)(?:\s+else\s+)(.*)",
+                    remaining,
+                    re.DOTALL,
+                )
+                if m:
+                    branches.append((m.group(1).strip(), m.group(2).strip()))
+                    remaining = m.group(3).strip()
+                else:
+                    # Last resort: if (cond) value (no else, rest of string is body)
+                    m = re.match(
+                        r"\bif\s*\((.+?)\)\s*\{?\s*(.+?)\s*\}?\s*$",
+                        remaining,
+                        re.DOTALL,
+                    )
+                    if m:
+                        branches.append((m.group(1).strip(), m.group(2).strip()))
+                        remaining = ""
+                    break
+                continue
+
+            branches.append((m.group(1).strip(), m.group(2).strip()))
+            remaining = m.group(3).strip()
+
+            # Continue with "else if ..." or "else ..."
+            if remaining.startswith("else if"):
+                remaining = remaining[5:]  # strip "else ", keep "if ..."
+                continue
+            elif remaining.startswith("else"):
+                remaining = remaining[4:].strip()
+                # Grab else body
+                body_m = re.match(r"\{(.+?)\}(.*)", remaining, re.DOTALL)
+                if body_m:
+                    branches.append(("", body_m.group(1).strip()))
+                    remaining = body_m.group(2).strip()
+                else:
+                    branches.append(("", remaining.strip()))
+                    remaining = ""
+                break
+            else:
+                break
+
+        if not branches:
+            return expr
+
+        # Build nested IF
+        return self._build_nested_if(branches)
+
+    @staticmethod
+    def _build_nested_if(branches: list[tuple[str, str]]) -> str:
+        """Build nested IF() from [(condition, body), ...] list.
+
+        The last branch may have an empty condition (the final else).
+        """
+        if not branches:
+            return ""
+
+        if len(branches) == 1:
+            cond, body = branches[0]
+            if cond:
+                return f"IF({cond}, {body})"
+            return body
+
+        # Pop the last branch — if it's unconditional, it's the final else
+        *cond_branches, last = branches
+        if last[0]:
+            # All branches are conditional (no else)
+            cond_branches.append(last)
+            last = None
+
+        # Build from inside out
+        if last:
+            result = last[1]
+        else:
+            result = "BLANK()"
+
+        for cond, body in reversed(cond_branches):
+            result = f"IF({cond}, {body}, {result})"
+
+        return result
+
+    def _convert_ternary(self, expr: str) -> str:
+        """Convert JavaScript ternary to IF(), handling nesting.
+
+        ``a ? b : c``  → ``IF(a, b, c)``
+        ``a ? b : c ? d : e``  → ``IF(a, b, IF(c, d, e))``
+        """
+        # Avoid false positives on already-converted IF or strings
+        if "?" not in expr or ":" not in expr:
+            return expr
+
+        # Simple non-nested ternary
+        m = re.match(r"^(.+?)\s*\?\s*(.+?)\s*:\s*(.+)$", expr)
+        if m:
+            cond = m.group(1).strip()
+            true_val = m.group(2).strip()
+            false_val = m.group(3).strip()
+
+            # Don't convert if it looks like already being inside IF() or a DAX function
+            if cond.startswith("IF("):
+                return expr
+
+            # Recursively handle nested ternary in false branch
+            false_val = self._convert_ternary(false_val)
+            # And in true branch (less common but possible)
+            true_val = self._convert_ternary(true_val)
+
+            return f"IF({cond}, {true_val}, {false_val})"
+
+        return expr
+
+    def _convert_switch(self, expr: str) -> str:
+        """Convert JavaScript switch statement to DAX SWITCH().
+
+        ``switch(x) { case "a": v1; break; case "b": v2; break; default: v3 }``
+        → ``SWITCH(x, "a", v1, "b", v2, v3)``
+        """
+        m = re.match(
+            r"\bswitch\s*\((.+?)\)\s*\{(.+)\}",
+            expr,
+            re.DOTALL,
+        )
+        if not m:
+            return expr
+
+        switch_expr = m.group(1).strip()
+        body = m.group(2).strip()
+
+        cases: list[str] = []  # alternating: value, result, value, result, ...
+        default_val = ""
+
+        for case_m in re.finditer(
+            r"\bcase\s+(.+?)\s*:\s*(.+?)(?:\s*;\s*break\s*;?|\s*(?=case\b|\bdefault\b|$))",
+            body,
+            re.DOTALL,
+        ):
+            case_val = case_m.group(1).strip()
+            case_result = case_m.group(2).strip().rstrip(";").strip()
+            cases.extend([case_val, case_result])
+
+        default_m = re.search(r"\bdefault\s*:\s*(.+?)(?:\s*;\s*break\s*;?|\s*}?\s*$)", body, re.DOTALL)
+        if default_m:
+            default_val = default_m.group(1).strip().rstrip(";").strip()
+
+        if not cases:
+            return expr
+
+        args = ", ".join(cases)
+        if default_val:
+            return f"SWITCH({switch_expr}, {args}, {default_val})"
+        return f"SWITCH({switch_expr}, {args})"
+
+    def _convert_var_return(self, expr: str) -> str:
+        """Convert multi-statement var/return blocks to the return expression.
+
+        Pattern:
+            var x = <expr1>;
+            var y = <expr2>;
+            return <result using x, y>;
+        →  <result with x, y inlined>
+
+        If there's no ``return``, takes the last expression as the result.
+        """
+        if not re.search(r"\bvar\s+\w", expr):
+            return expr
+
+        lines = re.split(r";\s*", expr.strip())
+        variables: dict[str, str] = {}
+        last_expr = ""
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # var x = <value>
+            var_m = re.match(r"\bvar\s+(\w+)\s*=\s*(.+)$", line, re.DOTALL)
+            if var_m:
+                var_name = var_m.group(1)
+                var_value = var_m.group(2).strip()
+                variables[var_name] = var_value
+                continue
+
+            # return <expr>
+            ret_m = re.match(r"\breturn\s+(.+)$", line, re.DOTALL)
+            if ret_m:
+                last_expr = ret_m.group(1).strip()
+                break
+
+            # Any other expression — keep as last
+            last_expr = line
+
+        if not last_expr:
+            return expr
+
+        # Inline variables into the return expression
+        for var_name, var_value in variables.items():
+            last_expr = re.sub(r"\b" + re.escape(var_name) + r"\b", var_value, last_expr)
+
+        return last_expr
+
+    def _convert_string_concat(self, expr: str) -> str:
+        """Convert JavaScript string concatenation ``+`` to DAX ``&``.
+
+        Only converts ``+`` to ``&`` when at least one operand is a string
+        literal (quoted) or the expression context suggests string output
+        (e.g., dynamic text elements).
+        """
+        if "+" not in expr:
+            return expr
+
+        # If the expression contains string literals around +, convert to &
+        # Pattern: "text" + expr  or  expr + "text"
+        has_string_concat = bool(re.search(
+            r'(?:"[^"]*"|\'[^\']*\')\s*\+|\+\s*(?:"[^"]*"|\'[^\']*\')',
+            expr,
+        ))
+        if has_string_concat:
+            # Replace + that is adjacent to a string literal with &
+            # Be careful not to replace + inside function calls that are numeric
+            result = re.sub(
+                r'("[^"]*"|\'[^\']*\')\s*\+\s*',
+                r"\1 & ",
+                expr,
+            )
+            result = re.sub(
+                r'\s*\+\s*("[^"]*"|\'[^\']*\')',
+                r" & \1",
+                result,
+            )
+            return result
+        return expr
+
+    @staticmethod
+    def _extract_return_value(block: str) -> str | None:
+        """Try to extract a usable expression from a script block.
+
+        For simple blocks like:
+            var x = row["a"] * 2;
+            return x;
+        Returns: ``row["a"] * 2``
+
+        For blocks with control flow (for, while, function), returns None.
+        """
+        # Reject blocks with loops or nested functions (too complex)
+        if re.search(r"\bfor\s*\(|\bwhile\s*\(|\bfunction\s+\w", block):
+            return None
+
+        # Try to find a return statement
+        m = re.search(r"\breturn\s+(.+?);\s*$", block, re.MULTILINE)
+        if m:
+            return_expr = m.group(1).strip()
+            # Inline any var declarations
+            variables: dict[str, str] = {}
+            for var_m in re.finditer(r"\bvar\s+(\w+)\s*=\s*(.+?);", block):
+                variables[var_m.group(1)] = var_m.group(2).strip()
+            for var_name, var_value in variables.items():
+                return_expr = re.sub(r"\b" + re.escape(var_name) + r"\b", var_value, return_expr)
+            return return_expr
+
+        return None
 
     def convert_batch(
         self,
